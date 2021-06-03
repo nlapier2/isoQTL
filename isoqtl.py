@@ -1,9 +1,11 @@
 import argparse
 import gzip
 import sys
+import os
+import subprocess
 import pandas as pd
 import numpy as np
-from scipy.stats import pearsonr, linregress
+from scipy.stats import f, linregress, pearsonr
 # import statsmodels.api as sm
 import statsmodels.formula.api as smf
 
@@ -12,6 +14,7 @@ def parseargs():    # handle user arguments
     parser = argparse.ArgumentParser(description='isoQTL main script.')
     parser.add_argument('--vcf', required=True, help='VCF or BCF file with genotypes. Required.')
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
+    parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
     parser.add_argument('--covariates', default='NONE', help='tsv file listing covariates to adjust phenotypes for.')
     parser.add_argument('--nominal', default=0.05, type=float,
                         help='Print transcripts with a nominal assocation p-value below this cutoff.')
@@ -52,6 +55,16 @@ def regress_out_covars(covariates_fname, tx2expr):
     return df_with_covars[tx_names]
 
 
+def get_gene_to_tx(tx2info):
+    gene_to_tx = {}
+    for tx in tx2info:
+        gene = tx2info[tx][3]
+        if gene not in gene_to_tx:
+            gene_to_tx[gene] = []
+        gene_to_tx[gene].append(tx)
+    return gene_to_tx
+
+
 def read_pheno_file(pheno_fname, covariates):
     pheno_df = pd.read_csv(pheno_fname, sep='\t', index_col=3).T  # read in phenotype file
     # split into info about the tx and expression levels into separate dataframes
@@ -60,7 +73,8 @@ def read_pheno_file(pheno_fname, covariates):
         tx2expr = regress_out_covars(covariates, tx2expr)  # regress out covariates from phenotypes
     else:  # still need to convert to numeric
         tx2expr = tx2expr.apply(pd.to_numeric, errors='coerce')
-    return tx2info, tx2expr
+    gene_to_tx = get_gene_to_tx(tx2info)
+    return tx2info, tx2expr, gene_to_tx
 
 
 def check_vcf(vcf, tx2expr):
@@ -89,30 +103,7 @@ def check_vcf(vcf, tx2expr):
     return meta_lines
 
 
-def create_tx_windows(tx2info, window):
-    # made for efficient mapping of a SNP location to transcripts in that location
-    half_window = window / 2.0
-    location_to_tx = {}  # maps chromosome to megabase to coordinates of transcript windows overlapping with that Mb
-    for tx in tx2info:
-        chrom, start, end, gid, strand = tx2info[tx]
-        start, end = int(start), int(end)
-        window_start = max(start - half_window, 0)
-        window_end = end + half_window
-        window_start_mb = int(window_start / 1000000)
-        window_end_mb = int(window_end / 1000000)
-        if chrom not in location_to_tx:
-            location_to_tx[chrom] = {}
-        if window_start_mb not in location_to_tx[chrom]:
-            location_to_tx[chrom][window_start_mb] = []
-        location_to_tx[chrom][window_start_mb].append([tx, window_start, window_end])
-        if window_end_mb != window_start_mb:
-            if window_end_mb not in location_to_tx[chrom]:
-                location_to_tx[chrom][window_end_mb] = []
-            location_to_tx[chrom][window_end_mb].append([tx, window_start, window_end])
-    return location_to_tx
-
-
-def preprocess_snp2geno(snp2geno):
+def preprocess_snp2geno(tx2expr, snp2geno):
     # remove genotypes for non-phenotyped individuals and remove "nan" entries
     snp2geno = (snp2geno.T[list(tx2expr.index)]).T  # remove genotypes for non-phenotyped individuals
     new_snp2geno = pd.DataFrame()
@@ -123,75 +114,109 @@ def preprocess_snp2geno(snp2geno):
     return new_snp2geno
 
 
-def find_peak_snps(snp2info, snp2geno, location_to_tx, tx_to_peak_snp):
-    # find transcript windows that each snp is in and see if this snp is the most correlated snp (so far) with the tx
-    for snp in snp2geno:
-        chrom, pos = snp2info[snp]['#CHROM'], snp2info[snp]['POS']
-        pos = int(pos)
-        pos_mb = int(pos / 1000000)
-        if chrom in location_to_tx:
-            if pos_mb in location_to_tx[chrom]:
-                # iterate through transcripts and find which this snp is in the window for
-                tx_window_list = location_to_tx[chrom][pos_mb]
-                for tx, window_start, window_end in tx_window_list:
-                    if window_start <= pos <= window_end:  # snp is within this transcript's window
-                        # print(tx2expr[tx])
-                        # print(snp2geno[snp])
-                        r_squared = pearsonr(tx2expr[tx], snp2geno[snp])[0] ** 2
-                        # update peak snp if this tx doesn't have a peak or this r_sq is stronger than previous high
-                        if tx not in tx_to_peak_snp or r_squared > tx_to_peak_snp[tx][1]:
-                            tx_to_peak_snp[tx] = [snp, r_squared, list(snp2geno[snp])]
-    return tx_to_peak_snp
+def get_gene_window(txlist, tx2info, window):
+    half_window = window / 2.0
+    chrom = ''  # chromosome this gene is on
+    first_start, last_end = 10**20, 0  # first start post & last end pos among all transcripts
+    for tx in txlist:
+        chrom, start, end, gid, strand = tx2info[tx]
+        if start < first_start:
+            first_start = start
+        if end > last_end:
+            last_end = end
+    # center window around first_start and last_end
+    window_start, window_end = first_start - half_window, last_end + half_window
+    return int(window_start), int(window_end), chrom
 
 
-def regress_peak_snps(tx_to_peak_snp):
-    # now perform full linear regression of transcripts against peak snps
-    for tx in tx_to_peak_snp:
-        snp, peak_r2, snp_genos = tx_to_peak_snp[tx]
+def get_betas_stderrs(snp_genos, tx2expr, txlist):
+    betas, stderrs = [], []
+    for tx in txlist:
         regression_results = linregress(tx2expr[tx], snp_genos)
-        beta, stderr, pval = regression_results[0], regression_results[4], regression_results[3]
-        tx_to_peak_snp[tx] = [snp, peak_r2, beta, stderr, pval]
-    return tx_to_peak_snp
+        beta, stderr = regression_results[0], regression_results[4]
+        betas.append(beta)
+        stderrs.append(stderr)
+    return np.array(betas), np.array(stderrs)
 
 
-def nominal_pass(vcf, tx2expr, location_to_tx, meta_lines):
-    # read thru chunks of vcf, finding which SNPs are in which transcripts' windows and keeping an updated dict mapping
-    #    transcripts to their peak SNPs, then perform linear regression of transcripts against peak SNP genotypes
-    tx_to_peak_snp = {}
-    lines_read = 0
-    chunksize = 10 ** 4
-    with pd.read_csv(vcf, chunksize=chunksize, sep='\t', header=meta_lines, index_col=2) as reader:
-        for chunk in reader:
-            chunk = chunk.T
-            snp2info, snp2geno = chunk.iloc[:8], chunk.iloc[8:]
-            # print(snp2geno.head())
-            # print(tx2expr.head())
-            snp2geno = preprocess_snp2geno(snp2geno)
-            tx_to_peak_snp = find_peak_snps(snp2info, snp2geno, location_to_tx, tx_to_peak_snp)
-            lines_read += chunksize
-            print('Lines processed from vcf: ' + str(lines_read))
-    tx_to_peak_snp = regress_peak_snps(tx_to_peak_snp)
-    return tx_to_peak_snp
+def hotelling_test(betas, covar_mat, sample_size):
+    # compute the parameters and inputs for the hotelling, then compute the stat
+    num_params = len(betas)
+    dof = sample_size - num_params  # sample_size * params - params
+    # covar_mat = np.identity(num_params)  # np.outer(stderrs, stderrs)
+    hotelling_stat = dof * np.matmul(np.matmul(betas, np.linalg.inv(covar_mat)), betas)
+    # convert hotelling stat to f stat for scipy-supported hypothesis testing
+    f_stat = (dof - num_params + 1) / (dof * num_params) * hotelling_stat
+    f_dfn = num_params
+    f_dfd = dof - num_params + 1
+    pval = f.sf(f_stat, f_dfn, f_dfd)
+    return f_stat, pval
+
+
+def get_covar_mat(tx2expr, txlist):
+    covar_mat = np.zeros((len(txlist), len(txlist)))
+    for i in range(len(txlist)):
+        for j in range(i+1):
+            tx1 = tx2expr[txlist[i]]
+            tx2 = tx2expr[txlist[j]]
+            corr = pearsonr(tx1, tx2)[0]
+            covar_mat[i][j] = corr
+            covar_mat[j][i] = corr
+    return covar_mat
+
+
+def find_peak_snp(tx2expr, snp2geno, txlist):
+    peak_snp, peak_stat, peak_pval = 'rsid', 0, 1
+    covar_mat = get_covar_mat(tx2expr, txlist)
+    for snp in snp2geno:
+        betas, stderrs = get_betas_stderrs(snp2geno[snp], tx2expr, txlist)
+        sample_size = len(snp2geno[snp])
+        # stat, pval = hotelling_test(betas, stderrs, sample_size)
+        stat, pval = hotelling_test(betas, covar_mat, sample_size)
+        if pval < peak_pval:
+            peak_snp = snp
+            peak_stat = stat
+            peak_pval = pval
+    return peak_snp, peak_stat, peak_pval
+
+
+def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools):
+    fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
+    gene_results = {}
+    for gene in gene_to_tx:
+        txlist = gene_to_tx[gene]
+        # get window around gene and subset the vcf for that window using bcftools
+        window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
+        window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
+        subprocess.Popen([bcftools, 'view', vcf, '-r', window_str, '-o', 'TEMP_isoqtl'], stderr=fnull).wait()
+        # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
+        gene_window_snps = pd.read_csv('TEMP_isoqtl', sep='\t', header=meta_lines+4, index_col=2).T
+        subprocess.Popen(['rm', 'TEMP_isoqtl']).wait()
+        snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
+        snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
+        # find and store the peak SNP for this gene and its association statistic and p-value
+        snp, fstat, pval = find_peak_snp(tx2expr, snp2geno, txlist)
+        gene_results[gene] = [snp, fstat, pval]
+    fnull.close()
+    return gene_results
 
 
 def write_results(results, out_fname, nominal_cutoff):
     with(open(out_fname, 'w')) as outfile:
-        outfile.write('#Transcript\tSNP\tR^2\tBeta\tStdErr\tP-value\n')
-        for tx in results:
-            snp, peak_r2, beta, stderr, pval = results[tx]
+        outfile.write('#Gene\tSNP\tF-Statistic\tP-value\n')
+        for gene in results:
+            snp, fstat, pval = results[gene]
             if pval > nominal_cutoff:
                 continue
-            fields = [str(i) for i in [tx, snp, peak_r2, beta, stderr, pval]]
+            fields = [str(i) for i in [gene, snp, fstat, pval]]
             outfile.write('\t'.join(fields) + '\n')
 
 
 if __name__ == "__main__":
     args = parseargs()
-    print('Reading in phenotypes file...')
-    tx2info, tx2expr = read_pheno_file(args.pheno, args.covariates)
+    # print('Reading in phenotypes file...')
+    tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno, args.covariates)
     meta_lines = check_vcf(args.vcf, tx2expr)
-    print('Computing cis windows around isoforms...')
-    location_to_tx = create_tx_windows(tx2info, args.window)
-    print('Performing nominal pass...')
-    nominal_results = nominal_pass(args.vcf, tx2expr, location_to_tx, meta_lines)
+    # print('Performing nominal pass...')
+    nominal_results = nominal_pass(args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools)
     write_results(nominal_results, args.output, args.nominal)
