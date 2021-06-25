@@ -5,7 +5,8 @@ import os
 import subprocess
 import pandas as pd
 import numpy as np
-from scipy.stats import f, linregress, pearsonr
+from scipy.stats import f, linregress  # , pearsonr
+from scipy.special import ncfdtr
 # import statsmodels.api as sm
 import statsmodels.formula.api as smf
 
@@ -115,7 +116,6 @@ def preprocess_snp2geno(tx2expr, snp2geno):
 
 
 def get_gene_window(txlist, tx2info, window):
-    half_window = window / 2.0
     chrom = ''  # chromosome this gene is on
     first_start, last_end = 10**20, 0  # first start post & last end pos among all transcripts
     for tx in txlist:
@@ -125,26 +125,30 @@ def get_gene_window(txlist, tx2info, window):
         if end > last_end:
             last_end = end
     # center window around first_start and last_end
-    window_start, window_end = first_start - half_window, last_end + half_window
+    window_start, window_end = first_start - window, last_end + window
     return int(window_start), int(window_end), chrom
 
 
 def get_betas_stderrs(snp_genos, tx2expr, txlist):
-    betas, stderrs = [], []
+    betas, stderrs, residuals = [], [], []
     for tx in txlist:
-        regression_results = linregress(tx2expr[tx], snp_genos)
+        # regression_results = linregress(tx2expr[tx], snp_genos)
+        regression_results = linregress(snp_genos, tx2expr[tx])
         beta, stderr = regression_results[0], regression_results[4]
+        resid = tx2expr[tx] - (snp_genos * beta)
         betas.append(beta)
         stderrs.append(stderr)
-    return np.array(betas), np.array(stderrs)
+        residuals.append(resid)
+    return np.array(betas), np.array(stderrs), np.array(residuals)
 
 
 def hotelling_test(betas, covar_mat, sample_size):
     # compute the parameters and inputs for the hotelling, then compute the stat
     num_params = len(betas)
-    dof = sample_size - num_params  # sample_size * params - params
+    dof = sample_size - num_params - 1  # sample_size * params - params
     # covar_mat = np.identity(num_params)  # np.outer(stderrs, stderrs)
-    hotelling_stat = dof * np.matmul(np.matmul(betas, np.linalg.inv(covar_mat)), betas)
+    # hotelling_stat = dof * np.matmul(np.matmul(betas, np.linalg.inv(covar_mat)), betas)
+    hotelling_stat = np.matmul(np.matmul(betas, np.linalg.inv(covar_mat)), betas)
     # convert hotelling stat to f stat for scipy-supported hypothesis testing
     f_stat = (dof - num_params + 1) / (dof * num_params) * hotelling_stat
     f_dfn = num_params
@@ -153,6 +157,54 @@ def hotelling_test(betas, covar_mat, sample_size):
     return f_stat, pval
 
 
+# implement test proposed by Hashimoto & Ohtani, Econometrics Letters (1990)
+def hashimoto_ohtani_t2_stat(betas, residuals, genos):
+    p = M = len(betas)  # number of isoforms
+    # R = np.identity(M)  # linear restrictions on betas
+    T = len(genos)  # sample size
+    K = 1  # num regressors
+    r = int((T-K) / K)
+    dof = r - p + 1
+    X = genos  # (genos - np.mean(genos)) / np.std(genos)
+    Q = np.sqrt(1 / np.dot(X, X))
+    # Q = np.array([1 / np.dot(X, X)])
+    # Q = np.invert(np.matmul(np.transpose(X), X))
+    Sigma = np.zeros((M, M))
+    for i in range(M):
+        for j in range(M):
+            Sigma[i][j] = np.dot(residuals[i], residuals[j]) / (T - K)
+
+    N = np.identity(T) - np.outer(X * (1 / np.dot(X, X)), np.transpose(X))
+    eigvals, eigvecs = np.linalg.eigh(N)
+    eigvals_1 = [i for i in range(len(eigvals)) if 0.999 < eigvals[i] < 1.001]
+    z = np.array([v[eigvals_1] for v in eigvecs])
+    resid_star = np.array([np.matmul(np.transpose(z), residuals[i]) for i in range(len(residuals))])
+
+    S = np.zeros((M, M))
+    for j in range(r):  # T):
+        vec_e_j = np.array([e[j] for e in resid_star])
+        # kron_prod = np.kron(np.identity(M), np.transpose(Q))
+        kron_prod = np.identity(M) * Q
+        eta_j = np.matmul(kron_prod, np.transpose(vec_e_j))
+        S += np.outer(eta_j, np.transpose(eta_j))
+    S /= r
+
+    hotelling_t2_stat = (np.matmul(np.matmul(np.transpose(betas), np.linalg.inv(S)), betas) / r) * ((r - p + 1) / p)
+    ncp = np.matmul(np.matmul(betas, np.linalg.inv(Sigma / np.dot(X, X))), betas)
+    pval = 1 - ncfdtr(p, dof, ncp, hotelling_t2_stat)
+    # print(p, dof, ncp, hotelling_t2_stat, pval)
+    '''
+    # convert hotelling stat to f stat for scipy-supported hypothesis testing
+    f_stat = (dof - M + 1) / (dof * M) * hotelling_t2_stat
+    f_dfn = M
+    f_dfd = dof - M + 1
+    pval = f.sf(f_stat, f_dfn, f_dfd)
+    return f_stat, pval
+    '''
+    return hotelling_t2_stat, pval
+
+
+'''
 def get_covar_mat(tx2expr, txlist):
     covar_mat = np.zeros((len(txlist), len(txlist)))
     for i in range(len(txlist)):
@@ -163,16 +215,47 @@ def get_covar_mat(tx2expr, txlist):
             covar_mat[i][j] = corr
             covar_mat[j][i] = corr
     return covar_mat
+'''
+
+
+'''
+def get_covar_mat(stderrs, genos):
+    covar_mat = np.outer(stderrs, stderrs)
+    # xtx = np.dot(genos, genos)
+    sample_size = len(genos)
+    adjust_dof = (sample_size - 2) / (sample_size - 3)
+    for i in range(len(covar_mat)):
+        for j in range(len(covar_mat)):
+            if i != j:
+                covar_mat[i][j] = covar_mat[i][j] * 0  # adjust_dof  # * xtx
+    return covar_mat
+'''
+
+
+def get_covar_mat(betas, residuals, genos):
+    n_vars = len(betas)
+    sample_size = len(genos)
+    xtx = np.dot(genos, genos)
+    xtx_inv = 1.0 / xtx
+    covar_mat = np.zeros((n_vars, n_vars))
+    for i in range(len(covar_mat)):
+        for j in range(len(covar_mat)):
+            # print(residuals[i].shape)
+            covar_mat[i][j] = (1 / sample_size) * np.dot(residuals[i], residuals[j]) * xtx_inv
+    return covar_mat
 
 
 def find_peak_snp(tx2expr, snp2geno, txlist):
     peak_snp, peak_stat, peak_pval = 'rsid', 0, 1
-    covar_mat = get_covar_mat(tx2expr, txlist)
+    # covar_mat = get_covar_mat(tx2expr, txlist)
     for snp in snp2geno:
-        betas, stderrs = get_betas_stderrs(snp2geno[snp], tx2expr, txlist)
         sample_size = len(snp2geno[snp])
+        betas, stderrs, residuals = get_betas_stderrs(snp2geno[snp], tx2expr, txlist)
+        # covar_mat = get_covar_mat(stderrs, snp2geno[snp])
+        # covar_mat = get_covar_mat(betas, residuals, snp2geno[snp])
         # stat, pval = hotelling_test(betas, stderrs, sample_size)
-        stat, pval = hotelling_test(betas, covar_mat, sample_size)
+        # stat, pval = hotelling_test(betas, covar_mat, sample_size)
+        stat, pval = hashimoto_ohtani_t2_stat(betas, residuals, np.array(snp2geno[snp]))
         if pval < peak_pval:
             peak_snp = snp
             peak_stat = stat
