@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import pandas as pd
 
 from scipy.special import betaln as betaln_func
@@ -62,6 +63,11 @@ def get_betas_stderrs(snp_genos, tx2expr, txlist, genos_var, genos_mean):
     return np.array(betas), np.array(residuals)
 
 
+def is_invertible(a):
+    return a.shape[0] == a.shape[1] and np.linalg.matrix_rank(a) == a.shape[0]
+
+
+
 # implement test proposed by Hashimoto & Ohtani, Econometrics Letters (1990)
 cdef (double, double) hashimoto_ohtani_t2_stat(np.ndarray[DTYPE_t, ndim=1] betas, np.ndarray[DTYPE_t, ndim=2] residuals, np.ndarray[DTYPE_t, ndim=1] genos, np.ndarray[DTYPE_t, ndim=2] z, double genos_dot_inv):
     cdef int i
@@ -74,9 +80,21 @@ cdef (double, double) hashimoto_ohtani_t2_stat(np.ndarray[DTYPE_t, ndim=1] betas
     cdef np.ndarray[DTYPE_t, ndim=2] Sigma = np.matmul(residuals, np.transpose(residuals)) / (T - K)
     cdef np.ndarray[DTYPE_t, ndim=2] resid_star = np.matmul(residuals, z)
     cdef np.ndarray[DTYPE_t, ndim=2] S = np.matmul(resid_star, np.transpose(resid_star)) * genos_dot_inv / r
+    
+    sig_div_genos = Sigma / np.dot(genos, genos)
+    if not is_invertible(S):
+        if max(betas) < 10**-10:  # singular matrix due to zero association
+            return 0.0, 1.0
+        else:  # singular matrix due to extreme association
+            return sys.float_info.max, sys.float_info.min
+    if not is_invertible(sig_div_genos):
+        if max(betas) < 10**-10:  # singular matrix due to zero association
+            return 0.0, 1.0
+        else:  # singular matrix due to extreme association
+            return sys.float_info.max, sys.float_info.min
 
     cdef double hotelling_t2_stat = (np.matmul(np.matmul(np.transpose(betas), np.linalg.inv(S)), betas) / r) * ((r - p + 1) / p)
-    ncp = np.matmul(np.matmul(betas, np.linalg.inv(Sigma / np.dot(genos, genos))), betas)
+    ncp = np.matmul(np.matmul(betas, np.linalg.inv(sig_div_genos)), betas)
     cdef double pval = 1 - ncfdtr(p, dof, ncp, hotelling_t2_stat)
     # print(p, dof, ncp, hotelling_t2_stat, pval)
     return hotelling_t2_stat, pval

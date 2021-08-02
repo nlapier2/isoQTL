@@ -5,14 +5,8 @@ import os
 import subprocess
 import pandas as pd
 import numpy as np
-from scipy.special import betaln as betaln_func
-from scipy.special import ncfdtr
-from scipy.stats import linregress, beta
-from scipy.optimize import minimize
-# import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from isoqtl_cis_pass import nominal_pass
-#from hashimoto_ohtani_cython import hashimoto_ohtani_t2_stat
 
 
 def parseargs():    # handle user arguments
