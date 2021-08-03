@@ -13,8 +13,10 @@ def parseargs():    # handle user arguments
     parser.add_argument('--vcf', required=True, help='VCF or BCF file with genotypes. Required.')
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
-    parser.add_argument('--output', default='simulated_phenos.bed', help='Where to write simulted phenotypes.')
-    parser.add_argument('--causal_snp_output', default='causal_snp_info.txt', help='Where to write causal SNPs for each gene.')
+    parser.add_argument('--dropout_rate', default=0.25, type=float, help='Percent of genes to randomly set to zero heritability.')
+    parser.add_argument('--h2g', default=0.05, type=float, help='Gene-level heritability.')
+    parser.add_argument('--h2i', default=0.02, type=float, help='Isoform-level heritability.')
+    parser.add_argument('--output', default='simulated_phenos', help='Output file base name.')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
     args = parser.parse_args()
@@ -93,8 +95,8 @@ def get_gene_window(txlist, tx2info, window):
     return int(window_start), int(window_end), chrom
 
 
-def simultate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i):
-    sim_tx2expr = {}
+def simulate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i):
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
     h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
     gene_eff = np.random.normal(0, h2g)
     for tx in txlist:
@@ -102,19 +104,26 @@ def simultate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i):
         genetic_component = causal_snp * (gene_eff + iso_eff)
         noise_component = np.random.normal(0, h2e, size = len(genetic_component))
         sim_tx2expr[tx] = genetic_component + noise_component
-        # noise = np.random.normal(0, h2e)
-        # sim_tx2expr[tx] = causal_snp * (gene_eff + iso_eff) + noise
-    return pd.DataFrame(sim_tx2expr)
+        sim_gene2expr += sim_tx2expr[tx]
+    return pd.DataFrame(sim_tx2expr), sim_gene2expr
     
     
-def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools):
+def make_gene_info(gene, tx2info, txlist, window_start, window_end, window):
+    tx_info = tx2info[txlist[0]]
+    gene_chr, gene_strand = tx_info[0], tx_info[-1]
+    gene_start, gene_end = window_start + window, window_end - window
+    gene_info = [gene_chr, gene_start, gene_end, gene, gene, gene_strand]
+    return gene_info
+
+
+def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate, h2g, h2i, window, bcftools):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
-    sim_tx2expr, gene2causalsnp = {}, {}
-    dropout_rate = 0.25  # randomly pick some genes to have no causal snps
+    sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = {}, {}, {}, {}
     for gene in gene_to_tx:
         txlist = gene_to_tx[gene]
         # get window around gene and subset the vcf for that window using bcftools
         window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
+        gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, window)
         window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
         subprocess.Popen([bcftools, 'view', vcf, '-r', window_str, '-o', 'TEMP_isoqtl'], stderr=fnull).wait()
         # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
@@ -128,23 +137,24 @@ def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcfto
         causal_snp = snp2geno[snp_set[int(random.random() * len(snp_set))]]
         #print(causal_snp) ; print(tx2expr[txlist[0]]) ; sys.exit()
         # simultate phenotypes
-        h2g, h2i = 0.25, 0.25
         if random.random() < dropout_rate:
             # randomly select some genes to have no causal effect
             gene2causalsnp[gene] = [causal_snp.name, '0.0', '0.0']
-            sim_phenos = simultate_phenotypes(tx2expr, txlist, causal_snp, 0.0, 0.0)
+            sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, 0.0, 0.0)
         else:
             gene2causalsnp[gene] = [causal_snp.name, str(h2g), str(h2i)]
-            sim_phenos = simultate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i)
+            sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i)
         for tx in sim_phenos:
             sim_tx2expr[tx] = sim_phenos[tx]
+        sim_gene2expr[gene] = sim_gene_pheno
     fnull.close()
     sim_tx2expr = pd.DataFrame(sim_tx2expr).astype(str)
-    return sim_tx2expr, gene2causalsnp
+    sim_gene2expr = pd.DataFrame(sim_gene2expr).astype(str)
+    return sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp
 
 
-def write_results(tx2info, sim_tx2expr, gene2causalsnp, output, causal_snp_output):
-    with(open(output, 'w')) as outfile:
+def write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp, output):
+    with(open(output + '.iso.bed', 'w')) as outfile:
         info_fields = ['#Chr', 'start', 'end', 'pid', 'gid', 'strand']
         outfile.write('\t'.join(info_fields + list(sim_tx2expr.index)) + '\n')
         for tx in tx2info:
@@ -152,7 +162,14 @@ def write_results(tx2info, sim_tx2expr, gene2causalsnp, output, causal_snp_outpu
             tx_info_fields = tx_info_fields[:3] + [tx] + tx_info_fields[3:]  # add tx name
             outfile.write('\t'.join(tx_info_fields) + '\t')
             outfile.write('\t'.join(list(sim_tx2expr[tx])) + '\n')
-    with(open(causal_snp_output, 'w')) as causal_outfile:
+    with(open(output + '.gene.bed', 'w')) as outfile:
+        info_fields = ['#Chr', 'start', 'end', 'pid', 'gid', 'strand']
+        outfile.write('\t'.join(info_fields + list(sim_tx2expr.index)) + '\n')
+        for gene in gene2info:
+            gene_info_fields = [str(i) for i in gene2info[gene]]
+            outfile.write('\t'.join(gene_info_fields) + '\t')
+            outfile.write('\t'.join(list(sim_gene2expr[gene])) + '\n')
+    with(open(output + '.causal.txt', 'w')) as causal_outfile:
         causal_outfile.write('#Gene\tCausal SNP\th2g\th2i\n')
         for gene in gene2causalsnp:
             causal_snp, h2g, h2i = gene2causalsnp[gene]
@@ -160,10 +177,26 @@ def write_results(tx2info, sim_tx2expr, gene2causalsnp, output, causal_snp_outpu
             causal_outfile.write('\t'.join([gene, causal_snp, h2g, h2i]) + '\n')
 
 
+def compress_and_index(output):
+    # compress bed files with bgzip, then index with tabix
+    iso_bed_name = output + '.iso.bed'
+    gene_bed_name = output + '.gene.bed'
+    iso_gz_outname = iso_bed_name + '.gz'
+    gene_gz_outname = gene_bed_name + '.gz'
+    with(open(iso_gz_outname, 'w')) as gz_outf:
+        subprocess.Popen(['bgzip', '-c', iso_bed_name], stdout=gz_outf).wait()
+    with(open(gene_gz_outname, 'w')) as gz_outf:
+        subprocess.Popen(['bgzip', '-c', gene_bed_name], stdout=gz_outf).wait()
+    subprocess.Popen(['tabix', '-p', 'bed', iso_gz_outname]).wait()
+    subprocess.Popen(['tabix', '-p', 'bed', gene_gz_outname]).wait()
+    subprocess.Popen(['rm', iso_bed_name, gene_bed_name]).wait()
+
+
 if __name__ == "__main__":
     args = parseargs()
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno)
     meta_lines = check_vcf(args.vcf, tx2expr)
-    sim_tx2expr, gene2causalsnp = simulation_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools)
-    write_results(tx2info, sim_tx2expr, gene2causalsnp, args.output, args.causal_snp_output)
+    sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = simulation_pass(
+        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.dropout_rate, args.h2g, args.h2i, args.window, args.bcftools)
+    write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp, args.output)
+    compress_and_index(args.output)
