@@ -6,6 +6,7 @@ import subprocess
 import sys
 import pandas as pd
 import numpy as np
+from io import StringIO
 
 
 def parseargs():    # handle user arguments
@@ -125,10 +126,11 @@ def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate,
         window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
         gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, window)
         window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
-        subprocess.Popen([bcftools, 'view', vcf, '-r', window_str, '-o', 'TEMP_isoqtl'], stderr=fnull).wait()
+        bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
+        gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
         # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
-        gene_window_snps = pd.read_csv('TEMP_isoqtl', sep='\t', header=meta_lines+4, index_col=2).T
-        subprocess.Popen(['rm', 'TEMP_isoqtl']).wait()
         snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
         snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
         
