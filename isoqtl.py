@@ -20,7 +20,6 @@ def parseargs():    # handle user arguments
     parser.add_argument('--output', default='isoqtl_results.tsv', help='Where to output results to.')
     parser.add_argument('--permute', default=100, type=int,
                         help='Number of permutations to do for a permutation pass. Set to 0 to do nominal pass only.')
-    parser.add_argument('--statistic', default='hashimoto', choices=['hashimoto', 'wilks'], help='Use "hashimoto" or "wilks" test statistic.')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
     args = parser.parse_args()
@@ -131,5 +130,5 @@ if __name__ == "__main__":
     meta_lines = check_vcf(args.vcf, tx2expr)
     # print('Performing nominal pass...')
     nominal_results, perm_results = nominal_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.statistic)
+        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal)
     write_results(nominal_results, perm_results, args.output, args.nominal)

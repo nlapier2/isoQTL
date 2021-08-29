@@ -79,7 +79,6 @@ cdef (double, double, double) precomp_wilks_bartlett(tx2expr, txlist, sample_siz
     resid_intercept = np.transpose(np.array(resid_intercept))
     #print(np.matmul(np.transpose(Y_pred), resid_intercept)) ; sys.exit()
     #print(resid_intercept.shape)
-    #print(is_invertible(np.matmul(np.transpose(resid_intercept), resid_intercept)))
     cdef double det_resid_intercept = np.linalg.det(np.matmul(np.transpose(resid_intercept), resid_intercept) / sample_size)
     cdef double multiplier = -(sample_size - 2 - 0.5 * num_iso)
     cdef double chi2_dof = num_iso
@@ -99,43 +98,7 @@ cdef (double, double) wilks_bartlett(np.ndarray[DTYPE_t, ndim=2] resid_full, dou
     return chisq_stat, pval
 
 
-def is_invertible(a):
-    return a.shape[0] == a.shape[1] and np.linalg.matrix_rank(a) == a.shape[0]
-
-
-# implement test proposed by Hashimoto & Ohtani, Econometrics Letters (1990)
-cdef (double, double) hashimoto_ohtani_t2_stat(np.ndarray[DTYPE_t, ndim=1] betas, np.ndarray[DTYPE_t, ndim=2] residuals, np.ndarray[DTYPE_t, ndim=1] genos, np.ndarray[DTYPE_t, ndim=2] z, double genos_dot_inv):
-    cdef int i
-    cdef double p = len(betas) * 1.0  # number of isoforms
-    cdef int T = len(genos)  # sample size
-    cdef double K = 1.0  # num regressors
-    cdef int r = int((T-K) / K)
-    cdef double dof = r - p + 1
-
-    cdef np.ndarray[DTYPE_t, ndim=2] Sigma = np.matmul(residuals, np.transpose(residuals)) / (T - K)
-    cdef np.ndarray[DTYPE_t, ndim=2] resid_star = np.matmul(residuals, z)
-    cdef np.ndarray[DTYPE_t, ndim=2] S = np.matmul(resid_star, np.transpose(resid_star)) * genos_dot_inv / r
-    
-    sig_div_genos = Sigma / np.dot(genos, genos)
-    if not is_invertible(S):
-        if max(betas) < 10**-10:  # singular matrix due to zero association
-            return 0.0, 1.0
-        else:  # singular matrix due to extreme association
-            return sys.float_info.max, sys.float_info.min
-    if not is_invertible(sig_div_genos):
-        if max(betas) < 10**-10:  # singular matrix due to zero association
-            return 0.0, 1.0
-        else:  # singular matrix due to extreme association
-            return sys.float_info.max, sys.float_info.min
-
-    cdef double hotelling_t2_stat = (np.matmul(np.matmul(np.transpose(betas), np.linalg.inv(S)), betas) / r) * ((r - p + 1) / p)
-    ncp = np.matmul(np.matmul(betas, np.linalg.inv(sig_div_genos)), betas)
-    cdef double pval = 1 - ncfdtr(p, dof, ncp, hotelling_t2_stat)
-    # print(p, dof, ncp, hotelling_t2_stat, pval)
-    return hotelling_t2_stat, pval
-
-
-def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, statistic):
+def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr):
     cdef double peak_stat = 0.0
     cdef double peak_pval = 1.0
     cdef double pval = 0.0
@@ -155,16 +118,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, s
         genos_mean = np.mean(genos)
         betas, residuals = get_betas_stderrs(snp2geno[snp], tx2expr, txlist, genos_var, genos_mean)
         genos = np.array(snp2geno[snp]).astype(np.double)
-        if statistic == 'hashimoto':
-            genos_dot_inv = 1 / np.dot(genos, genos)
-            N = np.identity(len(genos)) - np.outer(genos * genos_dot_inv, np.transpose(genos))
-            eigvals, eigvecs = np.linalg.eigh(N)
-            z = np.delete(eigvecs, 0, axis=1)
-            #print(betas) ; print(residuals) ; print(genos) ; print()
-            stat, pval = hashimoto_ohtani_t2_stat(betas, residuals, genos, z, genos_dot_inv)
-        else:
-            det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
-            stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+        det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
+        stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
         if pval < peak_pval:
             peak_snp = snp
             peak_stat = stat
@@ -172,10 +127,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, s
         if pval < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
                 betas, residuals = get_betas_stderrs(genos, permuted_tx2expr[i], txlist, genos_var, genos_mean)
-                if statistic == 'hashimoto':
-                    stat, pval = hashimoto_ohtani_t2_stat(betas, residuals, genos, z, genos_dot_inv)
-                else:
-                    stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+                stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
                 if pval < perm_peak_pvals[i]:
                     perm_peak_pvals[i] = pval
     return peak_snp, peak_stat, peak_pval, perm_peak_pvals
@@ -221,7 +173,7 @@ def permute_transcripts(tx2expr, txlist, n_perms):
     return np.transpose(np.array(tx_perms))
 
 
-def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh, statistic):
+def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     gene_results, perm_pvals = {}, {}
     for gene in gene_to_tx:
@@ -239,7 +191,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, statistic)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr)
             if pval < nominal_thresh:
                 dir_perm_pval = (1.0 + sum([pval >= perm_i for perm_i in perm_peak_pvals])) / float(n_perms + 1)
                 #if np.var(perm_peak_pvals) == 0.0:
@@ -252,7 +204,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
 
                 perm_pvals[gene] = [dir_perm_pval, beta_perm_pval]
         else:
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, statistic)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {})
         gene_results[gene] = [snp, fstat, pval]
     fnull.close()
     return gene_results, perm_pvals
