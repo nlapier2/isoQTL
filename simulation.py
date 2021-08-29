@@ -14,9 +14,12 @@ def parseargs():    # handle user arguments
     parser.add_argument('--vcf', required=True, help='VCF or BCF file with genotypes. Required.')
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
+    parser.add_argument('--cancel_out', action='store_true', help='Use to run a simulation where isoform phenotypes cancel each other out.')
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='Percent of genes to randomly set to zero heritability.')
+    parser.add_argument('--fixed', action='store_true', help='Perform fixed-effect simulation (default is random eff).')
     parser.add_argument('--h2g', default=0.05, type=float, help='Gene-level heritability.')
     parser.add_argument('--h2i', default=0.02, type=float, help='Isoform-level heritability.')
+    parser.add_argument('--num_iso', default=-1, type=int, help='Use to include genes only with a certain number of isoforms.')
     parser.add_argument('--output', default='simulated_phenos', help='Output file base name.')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
@@ -98,10 +101,53 @@ def get_gene_window(txlist, tx2info, window):
 
 def simulate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i):
     sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
+    min_eff = min(h2g, h2i) / 2
     h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
     gene_eff = np.random.normal(0, h2g)
     for tx in txlist:
         iso_eff = np.random.normal(0, h2i)
+        while abs(gene_eff + iso_eff) < min_eff:
+            # don't let effects cancel each other out
+            iso_eff = np.random.normal(0, h2i)
+        genetic_component = causal_snp * (gene_eff + iso_eff)
+        noise_component = np.random.normal(0, h2e, size = len(genetic_component))
+        sim_tx2expr[tx] = genetic_component + noise_component
+        sim_gene2expr += sim_tx2expr[tx]
+    return pd.DataFrame(sim_tx2expr), sim_gene2expr
+
+
+def simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, h2g, h2i):
+    # simulate isoform expressions that cancel each other out perfectly
+    # only works for even number of isoforms
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
+    h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
+    gene_eff = np.random.normal(0, h2g)
+    for i in range(len(txlist)):
+        tx = txlist[i]
+        if i < len(txlist) / 2:
+            iso_eff = np.random.normal(0, h2i)
+            genetic_component = causal_snp * (gene_eff + iso_eff)
+            noise_component = np.random.normal(0, h2e, size = len(genetic_component))
+            sim_tx2expr[tx] = genetic_component + noise_component
+        else:
+            # set this iso exp to negative of another iso exp
+            j = i - int(len(txlist) / 2)
+            other_tx = txlist[j]
+            sim_tx2expr[tx] = -1 * sim_tx2expr[other_tx]
+        sim_gene2expr += sim_tx2expr[tx]
+    return pd.DataFrame(sim_tx2expr), sim_gene2expr
+
+
+def simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, h2g, h2i, cancel_out):
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
+    h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
+    gene_eff = h2g # * np.sign(np.random.random() - 0.5)  # randomize sign
+    tx_counter = 0
+    for tx in txlist:
+        tx_counter += 1
+        iso_eff = h2i
+        if cancel_out and tx_counter % 2 == 1:
+            iso_eff *= -1.0  # opposite direction effect
         genetic_component = causal_snp * (gene_eff + iso_eff)
         noise_component = np.random.normal(0, h2e, size = len(genetic_component))
         sim_tx2expr[tx] = genetic_component + noise_component
@@ -117,17 +163,19 @@ def make_gene_info(gene, tx2info, txlist, window_start, window_end, window):
     return gene_info
 
 
-def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate, h2g, h2i, window, bcftools):
+#def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate, h2g, h2i, num_iso, window, bcftools):
+def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = {}, {}, {}, {}
     for gene in gene_to_tx:
         txlist = gene_to_tx[gene]
+        if args.num_iso != -1 and args.num_iso != len(txlist):
+            continue
         # get window around gene and subset the vcf for that window using bcftools
-        window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
-        gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, window)
+        window_start, window_end, chrom = get_gene_window(txlist, tx2info, args.window)
+        gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, args.window)
         window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
-        bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
         gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
         # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
@@ -139,13 +187,23 @@ def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate,
         causal_snp = snp2geno[snp_set[int(random.random() * len(snp_set))]]
         #print(causal_snp) ; print(tx2expr[txlist[0]]) ; sys.exit()
         # simultate phenotypes
-        if random.random() < dropout_rate:
+        if random.random() < args.dropout_rate:
             # randomly select some genes to have no causal effect
             gene2causalsnp[gene] = [causal_snp.name, '0.0', '0.0']
-            sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, 0.0, 0.0)
+            if args.fixed:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, 0.0, 0.0, args.cancel_out)
+            elif args.cancel_out:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, 0.0, 0.0)
+            else:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, 0.0, 0.0)
         else:
-            gene2causalsnp[gene] = [causal_snp.name, str(h2g), str(h2i)]
-            sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i)
+            gene2causalsnp[gene] = [causal_snp.name, str(args.h2g), str(args.h2i)]
+            if args.fixed:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, args.h2g, args.h2i, args.cancel_out)
+            elif args.cancel_out:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, args.h2g, args.h2i)
+            else:
+                sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, args.h2g, args.h2i)
         for tx in sim_phenos:
             sim_tx2expr[tx] = sim_phenos[tx]
         sim_gene2expr[gene] = sim_gene_pheno
@@ -160,6 +218,8 @@ def write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp
         info_fields = ['#Chr', 'start', 'end', 'pid', 'gid', 'strand']
         outfile.write('\t'.join(info_fields + list(sim_tx2expr.index)) + '\n')
         for tx in tx2info:
+            if tx not in sim_tx2expr:
+                continue
             tx_info_fields = [str(i) for i in tx2info[tx]]
             tx_info_fields = tx_info_fields[:3] + [tx] + tx_info_fields[3:]  # add tx name
             outfile.write('\t'.join(tx_info_fields) + '\t')
@@ -199,6 +259,6 @@ if __name__ == "__main__":
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno)
     meta_lines = check_vcf(args.vcf, tx2expr)
     sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = simulation_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.dropout_rate, args.h2g, args.h2i, args.window, args.bcftools)
+        args, tx2info, tx2expr, gene_to_tx, meta_lines)
     write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp, args.output)
     compress_and_index(args.output)

@@ -38,6 +38,16 @@ def read_isoqtl(isoqtl_res, use_perm, threshold):
     with(open(isoqtl_res, 'r')) as infile:
         infile.readline()  # skip header
         for line in infile:
+            if use_perm:
+                gene = line.strip().split(' ')[0]
+                isoqtl_egenes[gene] = True
+            else:
+                splits = line.strip().split('\t')
+                gene = splits[0]
+                pval = float(splits[3])
+                if pval < threshold:
+                    isoqtl_egenes[gene] = True
+            '''
             splits = line.strip().split('\t')
             gene = splits[0]
             if use_perm:
@@ -46,6 +56,7 @@ def read_isoqtl(isoqtl_res, use_perm, threshold):
                 pval = float(splits[3])
             if pval < threshold:
                 isoqtl_egenes[gene] = True
+            '''
     return isoqtl_egenes
 
 
@@ -56,11 +67,12 @@ def read_qtltools_gene(qtltools_gene_res, use_perm, threshold):
             splits = line.strip().split(' ')
             gene = splits[0]
             if use_perm:
-                pval = float(splits[-1])
+                qtltools_gene_egenes[gene] = True
+                #pval = float(splits[-1])
             else:
                 pval = float(splits[11])
-            if pval < threshold:
-                qtltools_gene_egenes[gene] = True
+                if pval < threshold:
+                    qtltools_gene_egenes[gene] = True
     return qtltools_gene_egenes
 
 
@@ -94,6 +106,8 @@ def calc_metrics_and_print(method_name, tp, fp, tn, fn):
     print('Precision: ' + str(precision))
     print('Recall: ' + str(recall))
     print('F1 Score: ' + str(f1_score) + '\n')
+    str_vals = ', '.join([str(i) for i in [tp, fp, tn, fn]])
+    print('TP FP TN FN: ' + str_vals + '\n')
 
 
 if __name__ == '__main__':
