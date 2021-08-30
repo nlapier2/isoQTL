@@ -14,11 +14,11 @@ def parseargs():    # handle user arguments
     parser.add_argument('--vcf', required=True, help='VCF or BCF file with genotypes. Required.')
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
-    parser.add_argument('--cancel_out', action='store_true', help='Use to run a simulation where isoform phenotypes cancel each other out.')
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='Percent of genes to randomly set to zero heritability.')
-    parser.add_argument('--fixed', action='store_true', help='Perform fixed-effect simulation (default is random eff).')
-    parser.add_argument('--h2g', default=0.05, type=float, help='Gene-level heritability.')
-    parser.add_argument('--h2i', default=0.02, type=float, help='Isoform-level heritability.')
+    parser.add_argument('--h2g', default=0.1, type=float, help='Gene-level heritability.')
+    parser.add_argument('--h2i', default=0.05, type=float, help='Isoform-level heritability.')
+    parser.add_argument('--num_causal', default=-1, type=int,
+        help='Specify a fixed number of causal SNPs per gene.')
     parser.add_argument('--num_iso', default=-1, type=int, help='Use to include genes only with a certain number of isoforms.')
     parser.add_argument('--output', default='simulated_phenos', help='Output file base name.')
     parser.add_argument('--window', default=50000, type=int,
@@ -99,59 +99,31 @@ def get_gene_window(txlist, tx2info, window):
     return int(window_start), int(window_end), chrom
 
 
-def simulate_phenotypes(tx2expr, txlist, causal_snp, h2g, h2i):
-    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
-    min_eff = min(h2g, h2i) / 2
-    h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
-    gene_eff = np.random.normal(0, h2g)
-    for tx in txlist:
-        iso_eff = np.random.normal(0, h2i)
-        while abs(gene_eff + iso_eff) < min_eff:
-            # don't let effects cancel each other out
-            iso_eff = np.random.normal(0, h2i)
-        genetic_component = causal_snp * (gene_eff + iso_eff)
-        noise_component = np.random.normal(0, h2e, size = len(genetic_component))
-        sim_tx2expr[tx] = genetic_component + noise_component
-        sim_gene2expr += sim_tx2expr[tx]
-    return pd.DataFrame(sim_tx2expr), sim_gene2expr
-
-
-def simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, h2g, h2i):
-    # simulate isoform expressions that cancel each other out perfectly
-    # only works for even number of isoforms
-    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
-    h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
-    gene_eff = np.random.normal(0, h2g)
-    for i in range(len(txlist)):
-        tx = txlist[i]
-        if i < len(txlist) / 2:
-            iso_eff = np.random.normal(0, h2i)
-            genetic_component = causal_snp * (gene_eff + iso_eff)
-            noise_component = np.random.normal(0, h2e, size = len(genetic_component))
-            sim_tx2expr[tx] = genetic_component + noise_component
-        else:
-            # set this iso exp to negative of another iso exp
-            j = i - int(len(txlist) / 2)
-            other_tx = txlist[j]
-            sim_tx2expr[tx] = -1 * sim_tx2expr[other_tx]
-        sim_gene2expr += sim_tx2expr[tx]
-    return pd.DataFrame(sim_tx2expr), sim_gene2expr
-
-
-def simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, h2g, h2i, cancel_out):
-    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp))
-    h2e = 1.0 - h2g - h2i  # residual variance not explained by gene or iso effects
-    gene_eff = h2g # * np.sign(np.random.random() - 0.5)  # randomize sign
-    tx_counter = 0
-    for tx in txlist:
-        tx_counter += 1
-        iso_eff = h2i
-        if cancel_out and tx_counter % 2 == 1:
-            iso_eff *= -1.0  # opposite direction effect
-        genetic_component = causal_snp * (gene_eff + iso_eff)
-        noise_component = np.random.normal(0, h2e, size = len(genetic_component))
-        sim_tx2expr[tx] = genetic_component + noise_component
-        sim_gene2expr += sim_tx2expr[tx]
+def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff):
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp_df))
+    for snp in causal_snp_df:
+        h2g = snp_h2g_eff[snp]
+        h2i = snp_h2i_eff[snp]
+        min_eff = min(h2g, h2i) / 2
+        gene_eff = np.random.normal(0, np.sqrt(h2g))
+        for tx in txlist:
+            iso_eff = np.random.normal(0, np.sqrt(h2i))
+            while abs(gene_eff + iso_eff) < min_eff:
+                # don't let effects cancel each other out
+                iso_eff = np.random.normal(0, np.sqrt(h2i))
+            genetic_component = causal_snp_df[snp] * (gene_eff + iso_eff)
+            if h2g + h2i == 0.0:
+                h2e = 1.0
+            else:  # pick noise based on realized genetic variance to preserve h2
+                h2e = np.var(genetic_component) * (1.0 / (h2g + h2i) - 1.0)
+            noise_component = np.random.normal(0, np.sqrt(h2e), size = len(genetic_component))
+            sim_expr = genetic_component + noise_component
+            # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
+            if tx not in sim_tx2expr:
+                sim_tx2expr[tx] = sim_expr
+            else:
+                sim_tx2expr[tx] += sim_expr
+            sim_gene2expr += sim_expr
     return pd.DataFrame(sim_tx2expr), sim_gene2expr
     
     
@@ -163,7 +135,45 @@ def make_gene_info(gene, tx2info, txlist, window_start, window_end, window):
     return gene_info
 
 
-#def simulation_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, dropout_rate, h2g, h2i, num_iso, window, bcftools):
+def sim_causal_snps(snp2geno, num_causal, h2g, h2i, dropout_rate):
+    if num_causal < 1:  # if num_causal not specified, pick randomly from 1-3
+        r = random.random()
+        if r < 0.3333:
+            num_causal = 1
+        elif r < 0.6666:
+            num_causal = 2
+        else:
+            num_causal = 3
+    # randomly pick num_causal snps in cis to be causal
+    snp_set = list(snp2geno.keys())
+    causal_snp_names = np.random.choice(snp_set, size=num_causal)
+    causal_snp_df = snp2geno[causal_snp_names]
+    # set relative amount of variance explained by each SNP randomly
+    relative_effects = np.array([random.random() for i in range(num_causal)])
+    relative_effects /= sum(relative_effects)  # make sure they sum to 1
+    # randomly set effects on some genes to 0
+    dropout = False
+    if random.random() < dropout_rate:
+        dropout = True
+        relative_effects *= 0.0
+    # now scale relative effects to heritability parameters
+    h2g_rel_eff = h2g * relative_effects
+    h2i_rel_eff = h2i * relative_effects
+    snp_h2g_eff = {causal_snp_names[i]: h2g_rel_eff[i] for i in range(num_causal)}
+    snp_h2i_eff = {causal_snp_names[i]: h2i_rel_eff[i] for i in range(num_causal)}
+    return causal_snp_names, causal_snp_df, snp_h2g_eff, snp_h2i_eff, dropout
+
+
+def get_cis_snps(args, tx2expr, meta_lines, window_str):
+    bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
+    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
+    # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
+    snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
+    snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
+    return snp2geno
+
+
 def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = {}, {}, {}, {}
@@ -175,35 +185,16 @@ def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
         window_start, window_end, chrom = get_gene_window(txlist, tx2info, args.window)
         gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, args.window)
         window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
-        bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
-        gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
-        # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
-        snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
-        snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
+        snp2geno = get_cis_snps(args, tx2expr, meta_lines, window_str)
         
-        # randomly select a causal snp
-        snp_set = snp2geno.keys()
-        causal_snp = snp2geno[snp_set[int(random.random() * len(snp_set))]]
-        #print(causal_snp) ; print(tx2expr[txlist[0]]) ; sys.exit()
+        # randomly select causal snps
+        causal_snp_names, causal_snp_df, snp_h2g_eff, snp_h2i_eff, dropout = sim_causal_snps(snp2geno, args.num_causal, args.h2g, args.h2i, args.dropout_rate)
         # simultate phenotypes
-        if random.random() < args.dropout_rate:
-            # randomly select some genes to have no causal effect
-            gene2causalsnp[gene] = [causal_snp.name, '0.0', '0.0']
-            if args.fixed:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, 0.0, 0.0, args.cancel_out)
-            elif args.cancel_out:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, 0.0, 0.0)
-            else:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, 0.0, 0.0)
+        if dropout:
+            gene2causalsnp[gene] = [causal_snp_names, '0.0', '0.0']
         else:
-            gene2causalsnp[gene] = [causal_snp.name, str(args.h2g), str(args.h2i)]
-            if args.fixed:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes_fixed(tx2expr, txlist, causal_snp, args.h2g, args.h2i, args.cancel_out)
-            elif args.cancel_out:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes_cancel_out(tx2expr, txlist, causal_snp, args.h2g, args.h2i)
-            else:
-                sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp, args.h2g, args.h2i)
+            gene2causalsnp[gene] = [causal_snp_names, str(args.h2g), str(args.h2i)]
+        sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff)
         for tx in sim_phenos:
             sim_tx2expr[tx] = sim_phenos[tx]
         sim_gene2expr[gene] = sim_gene_pheno
@@ -234,9 +225,10 @@ def write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp
     with(open(output + '.causal.txt', 'w')) as causal_outfile:
         causal_outfile.write('#Gene\tCausal SNP\th2g\th2i\n')
         for gene in gene2causalsnp:
-            causal_snp, h2g, h2i = gene2causalsnp[gene]
+            causal_snps, h2g, h2i = gene2causalsnp[gene]
+            causal_snps = ','.join(causal_snps)
             h2g, h2i = str(h2g), str(h2i)
-            causal_outfile.write('\t'.join([gene, causal_snp, h2g, h2i]) + '\n')
+            causal_outfile.write('\t'.join([gene, causal_snps, h2g, h2i]) + '\n')
 
 
 def compress_and_index(output):
