@@ -114,20 +114,27 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr):
     # perm_peak_pvals = [1.0 for i in range(len(permuted_tx2expr))]
     for snp in snp2geno:
         genos = np.array(snp2geno[snp]).astype(np.double)
-        genos_var = np.var(genos)
-        genos_mean = np.mean(genos)
-        betas, residuals = get_betas_stderrs(snp2geno[snp], tx2expr, txlist, genos_var, genos_mean)
-        genos = np.array(snp2geno[snp]).astype(np.double)
-        det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
-        stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+        if len(txlist) == 1:
+            beta, inter, r, pval, stderr = linregress(tx2expr[txlist[0]], genos)
+            stat = beta / stderr
+        else:
+            genos_var = np.var(genos)
+            genos_mean = np.mean(genos)
+            betas, residuals = get_betas_stderrs(snp2geno[snp], tx2expr, txlist, genos_var, genos_mean)
+            genos = np.array(snp2geno[snp]).astype(np.double)
+            det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
+            stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
         if pval < peak_pval:
             peak_snp = snp
             peak_stat = stat
             peak_pval = pval
         if pval < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
-                betas, residuals = get_betas_stderrs(genos, permuted_tx2expr[i], txlist, genos_var, genos_mean)
-                stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+                if len(txlist) == 1:
+                    beta, inter, r, pval, stderr = linregress(permuted_tx2expr[i][txlist[0]], genos)
+                else:
+                    betas, residuals = get_betas_stderrs(genos, permuted_tx2expr[i], txlist, genos_var, genos_mean)
+                    stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
                 if pval < perm_peak_pvals[i]:
                     perm_peak_pvals[i] = pval
     return peak_snp, peak_stat, peak_pval, perm_peak_pvals
@@ -173,21 +180,39 @@ def permute_transcripts(tx2expr, txlist, n_perms):
     return np.transpose(np.array(tx_perms))
 
 
+def combine_transcripts(tx2expr, txlist, corr_thresh):
+    # if all transcripts are correlated above a threshold, sum them
+    tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
+    corr_mat = np.corrcoef(tx_mat)
+    min_corr = min([min(i) for i in corr_mat])
+    if min_corr > corr_thresh:
+        txlist = [txlist[0]]
+        tx2expr[txlist] = sum(tx_mat)
+    return tx2expr, txlist
+
+
+def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
+    window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
+    window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
+    bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
+    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
+    # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
+    snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
+    snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
+    return snp2geno
+
+
 def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     gene_results, perm_pvals = {}, {}
     for gene in gene_to_tx:
         txlist = gene_to_tx[gene]
         # get window around gene and subset the vcf for that window using bcftools
-        window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
-        window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
-        bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
-        gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
-        # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
-        snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
-        snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
+        snp2geno = get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window)
+        if len(txlist) > 1:
+            tx2expr, txlist = combine_transcripts(tx2expr, txlist, 0.9)
+        
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)

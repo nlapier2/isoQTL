@@ -6,7 +6,7 @@ import subprocess
 import pandas as pd
 import numpy as np
 import statsmodels.formula.api as smf
-from isoqtl_cis_pass import nominal_pass
+from cis_pass import nominal_pass
 
 
 def parseargs():    # handle user arguments
@@ -107,9 +107,9 @@ def check_vcf(vcf, tx2expr):
 def write_results(results, perm_results, out_fname, nominal_cutoff):
     with(open(out_fname, 'w')) as outfile:
         if len(perm_results) > 0:
-            outfile.write('#Gene\tSNP\tF-Statistic\tP-value\tDir. Perm. P-value\tBeta Perm. P-value\n')
+            outfile.write('#Gene\tSNP\tStatistic\tNominal P-value\tDir. Perm. P-value\tBeta Perm. P-value\n')
         else:
-            outfile.write('#Gene\tSNP\tF-Statistic\tP-value\n')
+            outfile.write('#Gene\tSNP\tStatistic\tNominal P-value\n')
         for gene in results:
             snp, fstat, pval = results[gene]
             if pval > nominal_cutoff:

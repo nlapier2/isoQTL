@@ -146,7 +146,7 @@ def sim_causal_snps(snp2geno, num_causal, h2g, h2i, dropout_rate):
             num_causal = 3
     # randomly pick num_causal snps in cis to be causal
     snp_set = list(snp2geno.keys())
-    causal_snp_names = np.random.choice(snp_set, size=num_causal)
+    causal_snp_names = np.random.choice(snp_set, size=num_causal, replace=False)
     causal_snp_df = snp2geno[causal_snp_names]
     # set relative amount of variance explained by each SNP randomly
     relative_effects = np.array([random.random() for i in range(num_causal)])
@@ -164,14 +164,17 @@ def sim_causal_snps(snp2geno, num_causal, h2g, h2i, dropout_rate):
     return causal_snp_names, causal_snp_df, snp_h2g_eff, snp_h2i_eff, dropout
 
 
-def get_cis_snps(args, tx2expr, meta_lines, window_str):
+def get_cis_snps(args, gene, gene2info, txlist, tx2info, tx2expr, meta_lines):
+    window_start, window_end, chrom = get_gene_window(txlist, tx2info, args.window)
+    gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, args.window)
+    window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
     bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
     gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
     # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
     snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
     snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
-    return snp2geno
+    return snp2geno, gene2info
 
 
 def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
@@ -182,11 +185,7 @@ def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
         if args.num_iso != -1 and args.num_iso != len(txlist):
             continue
         # get window around gene and subset the vcf for that window using bcftools
-        window_start, window_end, chrom = get_gene_window(txlist, tx2info, args.window)
-        gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, args.window)
-        window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
-        snp2geno = get_cis_snps(args, tx2expr, meta_lines, window_str)
-        
+        snp2geno, gene2info = get_cis_snps(args, gene, gene2info, txlist, tx2info, tx2expr, meta_lines)
         # randomly select causal snps
         causal_snp_names, causal_snp_df, snp_h2g_eff, snp_h2i_eff, dropout = sim_causal_snps(snp2geno, args.num_causal, args.h2g, args.h2i, args.dropout_rate)
         # simultate phenotypes
