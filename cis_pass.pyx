@@ -184,10 +184,10 @@ def combine_transcripts(tx2expr, txlist, corr_thresh):
     # if all transcripts are correlated above a threshold, sum them
     tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
     corr_mat = np.corrcoef(tx_mat)
-    min_corr = min([min(i) for i in corr_mat])
+    min_corr = min([min(i**2) for i in corr_mat])  # min r^2 between transcripts
     if min_corr > corr_thresh:
         txlist = [txlist[0]]
-        tx2expr[txlist] = sum(tx_mat)
+        tx2expr[txlist[0]] = sum(tx_mat)
     return tx2expr, txlist
 
 
@@ -203,7 +203,7 @@ def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
     return snp2geno
 
 
-def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh):
+def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh, simple_thresh):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     gene_results, perm_pvals = {}, {}
     for gene in gene_to_tx:
@@ -211,7 +211,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
         # get window around gene and subset the vcf for that window using bcftools
         snp2geno = get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window)
         if len(txlist) > 1:
-            tx2expr, txlist = combine_transcripts(tx2expr, txlist, 0.9)
+            tx2expr, txlist = combine_transcripts(tx2expr, txlist, simple_thresh)
         
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:

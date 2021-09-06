@@ -16,10 +16,12 @@ def parseargs():    # handle user arguments
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
     parser.add_argument('--covariates', default='NONE', help='tsv file listing covariates to adjust phenotypes for.')
     parser.add_argument('--nominal', default=0.5, type=float,
-                        help='Print transcripts with a nominal assocation p-value below this cutoff.')
+                        help='Print genes with a nominal assocation p-value below this cutoff.')
     parser.add_argument('--output', default='isoqtl_results.tsv', help='Where to output results to.')
     parser.add_argument('--permute', default=100, type=int,
                         help='Number of permutations to do for a permutation pass. Set to 0 to do nominal pass only.')
+    parser.add_argument('--simple_thresh', default=0.5, type=float,
+                        help='Run simple linear regression on summed iso exp when all iso exp are correlated at least this much (r^2).')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
     args = parser.parse_args()
@@ -130,5 +132,5 @@ if __name__ == "__main__":
     meta_lines = check_vcf(args.vcf, tx2expr)
     # print('Performing nominal pass...')
     nominal_results, perm_results = nominal_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal)
+        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.simple_thresh)
     write_results(nominal_results, perm_results, args.output, args.nominal)
