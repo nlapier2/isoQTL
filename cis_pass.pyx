@@ -6,7 +6,7 @@ from io import StringIO
 
 from scipy.special import betaln as betaln_func
 from scipy.special import ncfdtr
-from scipy.stats import linregress, beta, chi2
+from scipy.stats import linregress, beta, chi2, norm
 from scipy.optimize import minimize
 
 import numpy as np
@@ -98,7 +98,45 @@ cdef (double, double) wilks_bartlett(np.ndarray[DTYPE_t, ndim=2] resid_full, dou
     return chisq_stat, pval
 
 
-def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr):
+def steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms):
+    # get corrs of each tx with the snp
+    tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
+    snp_corrs = [np.corrcoef(tx_mat[i], snp2geno[snp])[0][1] for i in range(len(tx_mat))]
+    tx_corr_mat = np.corrcoef(tx_mat)
+    # compute phi, c, and z_1* (eq. 3, 10, 12 in steiger)
+    for k in range(len(tx_mat)):
+        for h in range(len(tx_mat)):
+            if h <= k:  # matrix is symmetrical, so only compute half
+                continue
+            r_kh = tx_corr_mat[k][h]
+            r_jk, r_jh = snp_corrs[k], snp_corrs[h]
+            # compute fisher-transformed z-statistics (eq. 8 in steiger)
+            z_jk = -0.5 * np.log((1 + r_jk) / (1 - r_jk))
+            z_jh = -0.5 * np.log((1 + r_jh) / (1 - r_jh))
+            # compute phi (eq. 3 in steiger)
+            phi = r_kh * (1 - r_jk**2 - r_jh**2) - 0.5 * (r_jk * r_jh) * (1 - r_jk**2 - r_jh**2 - r_kh**2)
+            # compute s and z_1* (eq 10 and 12 in steiger)
+            s_jkh = phi / (1 - r_jk**2) * (1 - r_jh**2)
+            z1 = np.sqrt(len(tx_mat[0]) - 3) * (z_jk - z_jh) * -np.sqrt((2 - 2 * s_jkh))
+            # compute pval and if significant than proceed to multivariate test
+            if z1 >= 0:
+                pval = 2 * norm.sf(z1)
+            else:
+                pval = 2 * norm.cdf(z1)
+            #print(z1, pval)
+            if pval < 0.05:
+                return tx2expr, txlist, permuted_tx2expr
+    # if no sig diff corrs, combine transcripts and proceed to univariate test
+    this_txlist = [txlist[0]]
+    this_tx2expr = {this_txlist[0]: sum(tx_mat)}
+    if n_perms > 0:
+        this_perm = permute_transcripts(tx2expr, txlist, n_perms)
+    else:
+        this_perm = {}
+    return this_tx2expr, this_txlist, this_perm
+
+
+def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms):
     cdef double peak_stat = 0.0
     cdef double peak_pval = 1.0
     cdef double pval = 0.0
@@ -114,8 +152,14 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr):
     # perm_peak_pvals = [1.0 for i in range(len(permuted_tx2expr))]
     for snp in snp2geno:
         genos = np.array(snp2geno[snp]).astype(np.double)
-        if len(txlist) == 1:
-            beta, inter, r, pval, stderr = linregress(tx2expr[txlist[0]], genos)
+        #print(snp)
+        if len(txlist) > 1:
+            this_tx2expr, this_txlist, this_perm = steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms)
+        else:
+            this_tx2expr, this_txlist, this_perm = tx2expr, txlist, permuted_tx2expr
+        #print('')
+        if len(this_txlist) == 1:
+            beta, inter, r, pval, stderr = linregress(this_tx2expr[this_txlist[0]], genos)
             stat = beta / stderr
         else:
             genos_var = np.var(genos)
@@ -130,8 +174,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr):
             peak_pval = pval
         if pval < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
-                if len(txlist) == 1:
-                    beta, inter, r, pval, stderr = linregress(permuted_tx2expr[i][txlist[0]], genos)
+                if len(this_txlist) == 1:
+                    beta, inter, r, pval, stderr = linregress(this_perm[i][this_txlist[0]], genos)
                 else:
                     betas, residuals = get_betas_stderrs(genos, permuted_tx2expr[i], txlist, genos_var, genos_mean)
                     stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
@@ -180,7 +224,7 @@ def permute_transcripts(tx2expr, txlist, n_perms):
     return np.transpose(np.array(tx_perms))
 
 
-def combine_transcripts(tx2expr, txlist, corr_thresh):
+def check_combine_transcripts(tx2expr, txlist, corr_thresh):
     # if all transcripts are correlated above a threshold, sum them
     tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
     corr_mat = np.corrcoef(tx_mat)
@@ -210,13 +254,13 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
         txlist = gene_to_tx[gene]
         # get window around gene and subset the vcf for that window using bcftools
         snp2geno = get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window)
-        if len(txlist) > 1:
-            tx2expr, txlist = combine_transcripts(tx2expr, txlist, simple_thresh)
+        #if len(txlist) > 1:
+        #    tx2expr, txlist = check_combine_transcripts(tx2expr, txlist, simple_thresh)
         
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms)
             if pval < nominal_thresh:
                 dir_perm_pval = (1.0 + sum([pval >= perm_i for perm_i in perm_peak_pvals])) / float(n_perms + 1)
                 #if np.var(perm_peak_pvals) == 0.0:
@@ -229,7 +273,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
 
                 perm_pvals[gene] = [dir_perm_pval, beta_perm_pval]
         else:
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {})
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, n_perms)
         gene_results[gene] = [snp, fstat, pval]
     fnull.close()
     return gene_results, perm_pvals
