@@ -17,6 +17,7 @@ def parseargs():    # handle user arguments
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='Percent of genes to randomly set to zero heritability.')
     parser.add_argument('--h2g', default=0.1, type=float, help='Gene-level heritability.')
     parser.add_argument('--h2i', default=0.05, type=float, help='Isoform-level heritability.')
+    parser.add_argument('--h2shared', default=0.25, type=float, help='Heritability shared across the gene, but not due to QTL.')
     parser.add_argument('--num_causal', default=-1, type=int,
         help='Specify a fixed number of causal SNPs per gene.')
     parser.add_argument('--num_iso', default=-1, type=int, help='Use to include genes only with a certain number of isoforms.')
@@ -99,32 +100,121 @@ def get_gene_window(txlist, tx2info, window):
     return int(window_start), int(window_end), chrom
 
 
-def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff):
+'''
+def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff, args_h2g, args_h2i, args_h2shared):
     sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp_df))
-    for snp in causal_snp_df:
-        h2g = snp_h2g_eff[snp]
-        h2i = snp_h2i_eff[snp]
-        min_eff = min(h2g, h2i) / 2
-        gene_eff = np.random.normal(0, np.sqrt(h2g))
-        for tx in txlist:
-            iso_eff = np.random.normal(0, np.sqrt(h2i))
+    for tx in txlist:
+        genetic_component = None
+        for snp in causal_snp_df:
+            snp_h2g = snp_h2g_eff[snp]
+            snp_h2i = snp_h2i_eff[snp]
+            min_eff = min(snp_h2g, snp_h2i) / 2
+            gene_eff = np.random.normal(0, np.sqrt(snp_h2g))
+            iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
             while abs(gene_eff + iso_eff) < min_eff:
                 # don't let effects cancel each other out
-                iso_eff = np.random.normal(0, np.sqrt(h2i))
-            genetic_component = causal_snp_df[snp] * (gene_eff + iso_eff)
-            if h2g + h2i == 0.0:
-                h2e = 1.0
-            else:  # pick noise based on realized genetic variance to preserve h2
-                h2e = np.var(genetic_component) * (1.0 / (h2g + h2i) - 1.0)
-            noise_component = np.random.normal(0, np.sqrt(h2e), size = len(genetic_component))
-            sim_expr = genetic_component + noise_component
-            # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
-            if tx not in sim_tx2expr:
-                sim_tx2expr[tx] = sim_expr
+                iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
+            if genetic_component is None:
+                genetic_component = causal_snp_df[snp] * (gene_eff + iso_eff)
             else:
-                sim_tx2expr[tx] += sim_expr
-            sim_gene2expr += sim_expr
+                genetic_component += causal_snp_df[snp] * (gene_eff + iso_eff)
+        if args_h2g + args_h2i == 0.0:
+            h2noise = 1.0 - args_h2shared
+            this_h2shared = args_h2shared
+        else:  # pick noise & shared effect based on realized genetic variance to preserve h2
+            #h2noise = np.var(genetic_component) * (1.0 / (h2g + h2i) - 1.0)
+            #h2noise = np.var(genetic_component) * ((1.0 - h2shared) / (h2g + h2i))
+            #h2shared = np.var(genetic_component) * (h2shared / (h2g + h2i))
+            h2noise = np.var(genetic_component) * (1.0 / (args_h2g + args_h2i) - 1.0)
+            this_h2shared = np.var(genetic_component) * (args_h2shared / (args_h2g + args_h2i))
+        shared_component = np.random.normal(0, np.sqrt(this_h2shared)) * np.ones(len(genetic_component))  # draw once, then shared
+        noise_component = np.random.normal(0, np.sqrt(h2noise), size = len(genetic_component))  # draw separately for each person
+        sim_expr = genetic_component + noise_component + shared_component
+        # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
+        sim_tx2expr[tx] = sim_expr
+        #if tx not in sim_tx2expr:
+        #    sim_tx2expr[tx] = sim_expr
+        #else:
+        #    sim_tx2expr[tx] += sim_expr
+        sim_gene2expr += sim_expr
     return pd.DataFrame(sim_tx2expr), sim_gene2expr
+'''
+
+
+def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff, args_h2shared):
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp_df))
+    total_h2g, total_h2i = 0.0, 0.0
+    # first sim genetic component: the effects of the SNPs on genes & isoforms
+    for snp in causal_snp_df:
+        snp_h2g = snp_h2g_eff[snp]
+        snp_h2i = snp_h2i_eff[snp]
+        total_h2g, total_h2i = total_h2g + snp_h2g, total_h2i + snp_h2i
+        min_eff = min(snp_h2g, snp_h2i) / 2
+        gene_eff = np.random.normal(0, np.sqrt(snp_h2g))
+        for tx in txlist:
+            iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
+            while abs(gene_eff + iso_eff) < min_eff:
+                # don't let effects cancel each other out
+                iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
+            genetic_component = causal_snp_df[snp] * (gene_eff + iso_eff)
+            if tx not in sim_tx2expr:
+                sim_tx2expr[tx] = genetic_component
+            else:
+                sim_tx2expr[tx] += genetic_component
+    # now add in the noise and shared components
+    for tx in sim_tx2expr:
+        genetic_component = sim_tx2expr[tx]
+        if total_h2g + total_h2i == 0.0:
+            h2noise = 1.0 - args_h2shared
+            this_h2shared = args_h2shared
+        else:  # pick noise based on realized genetic variance to preserve h2
+            h2noise = np.var(genetic_component) * ((1.0 - args_h2shared) / (total_h2g + total_h2i) - 1.0)
+            this_h2shared = np.var(genetic_component) * (args_h2shared / (total_h2g + total_h2i))
+        shared_component = np.random.normal(0, np.sqrt(this_h2shared)) * np.ones(len(genetic_component))  # draw once, then shared
+        noise_component = np.random.normal(0, np.sqrt(h2noise), size = len(genetic_component))  # draw separately for each person
+        sim_expr = genetic_component + noise_component + shared_component
+        # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
+        sim_tx2expr[tx] = sim_expr  # final iso expression is sum of components
+        sim_gene2expr += sim_expr  # gene expression is sum of iso expressions
+    return pd.DataFrame(sim_tx2expr), sim_gene2expr
+
+
+'''
+def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff, args_h2g, args_h2i, args_h2shared):
+    sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp_df))
+    #args_h2g, args_h2i = 0.0, 0.0
+    # first sim genetic component: the effects of the SNPs on genes & isoforms
+    for snp in causal_snp_df:
+        snp_h2g = snp_h2g_eff[snp]
+        snp_h2i = snp_h2i_eff[snp]
+        #args_h2g += snp_h2g
+        #args_h2i += snp_h2i
+        min_eff = min(snp_h2g, snp_h2i) / 2
+        gene_eff = np.random.normal(0, np.sqrt(snp_h2g))
+        for tx in txlist:
+            iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
+            while abs(gene_eff + iso_eff) < min_eff:
+                # don't let effects cancel each other out
+                iso_eff = np.random.normal(0, np.sqrt(snp_h2i))
+            genetic_component = causal_snp_df[snp] * (gene_eff + iso_eff)
+            if tx not in sim_tx2expr:
+                sim_tx2expr[tx] = genetic_component
+            else:
+                sim_tx2expr[tx] += genetic_component
+    # now add in the noise and shared components
+    for tx in sim_tx2expr:
+        genetic_component = sim_tx2expr[tx]
+        if args_h2g + args_h2i == 0.0:
+            h2noise = 1.0
+        else:  # pick noise based on realized genetic variance to preserve h2
+            h2noise = np.var(genetic_component) * (1.0 / (args_h2g + args_h2i) - 1.0)
+        noise_component = np.random.normal(0, np.sqrt(h2noise), size = len(genetic_component))  # draw separately for each person
+        sim_expr = genetic_component + noise_component
+        # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
+        sim_tx2expr[tx] = sim_expr  # final iso expression is sum of components
+        sim_gene2expr += sim_expr  # gene expression is sum of iso expressions
+    return pd.DataFrame(sim_tx2expr), sim_gene2expr
+'''
     
     
 def make_gene_info(gene, tx2info, txlist, window_start, window_end, window):
@@ -193,7 +283,7 @@ def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
             gene2causalsnp[gene] = [causal_snp_names, '0.0', '0.0']
         else:
             gene2causalsnp[gene] = [causal_snp_names, str(args.h2g), str(args.h2i)]
-        sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff)
+        sim_phenos, sim_gene_pheno = simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff, args.h2shared)
         for tx in sim_phenos:
             sim_tx2expr[tx] = sim_phenos[tx]
         sim_gene2expr[gene] = sim_gene_pheno
@@ -247,6 +337,9 @@ def compress_and_index(output):
 
 if __name__ == "__main__":
     args = parseargs()
+    h2all = [args.h2g + args.h2i + args.h2shared]
+    if min(h2all) < 0.0 or sum(h2all) > 1.0:
+        sys.exit('Error: h2 parameters must be positive and sum to less than 1.0.')
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno)
     meta_lines = check_vcf(args.vcf, tx2expr)
     sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = simulation_pass(
