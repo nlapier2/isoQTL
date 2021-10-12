@@ -98,7 +98,7 @@ cdef (double, double) wilks_bartlett(np.ndarray[DTYPE_t, ndim=2] resid_full, dou
     return chisq_stat, pval
 
 
-def steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms):
+def steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms, steiger_thresh):
     # get corrs of each tx with the snp
     tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
     snp_corrs = [np.corrcoef(tx_mat[i], snp2geno[snp])[0][1] for i in range(len(tx_mat))]
@@ -124,7 +124,7 @@ def steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms):
             else:
                 pval = 2 * norm.cdf(z1)
             #print(z1, pval)
-            if pval < 0.05:
+            if pval < steiger_thresh:
                 return tx2expr, txlist, permuted_tx2expr
     # if no sig diff corrs, combine transcripts and proceed to univariate test
     this_txlist = [txlist[0]]
@@ -136,7 +136,7 @@ def steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms):
     return this_tx2expr, this_txlist, this_perm
 
 
-def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms):
+def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, steiger_thresh):
     cdef double peak_stat = 0.0
     cdef double peak_pval = 1.0
     cdef double pval = 0.0
@@ -154,7 +154,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         genos = np.array(snp2geno[snp]).astype(np.double)
         #print(snp)
         if len(txlist) > 1:
-            this_tx2expr, this_txlist, this_perm = steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms)
+            this_tx2expr, this_txlist, this_perm = steiger_test(tx2expr, txlist, snp2geno, snp, permuted_tx2expr, n_perms, steiger_thresh)
         else:
             this_tx2expr, this_txlist, this_perm = tx2expr, txlist, permuted_tx2expr
         #print('')
@@ -224,17 +224,6 @@ def permute_transcripts(tx2expr, txlist, n_perms):
     return np.transpose(np.array(tx_perms))
 
 
-def check_combine_transcripts(tx2expr, txlist, corr_thresh):
-    # if all transcripts are correlated above a threshold, sum them
-    tx_mat = [np.array(tx2expr[tx]) for tx in txlist]
-    corr_mat = np.corrcoef(tx_mat)
-    min_corr = min([min(i**2) for i in corr_mat])  # min r^2 between transcripts
-    if min_corr > corr_thresh:
-        txlist = [txlist[0]]
-        tx2expr[txlist[0]] = sum(tx_mat)
-    return tx2expr, txlist
-
-
 def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
     window_start, window_end, chrom = get_gene_window(txlist, tx2info, window)
     window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
@@ -247,20 +236,18 @@ def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
     return snp2geno
 
 
-def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh, simple_thresh):
+def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh, steiger_thresh):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     gene_results, perm_pvals = {}, {}
     for gene in gene_to_tx:
         txlist = gene_to_tx[gene]
         # get window around gene and subset the vcf for that window using bcftools
         snp2geno = get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window)
-        #if len(txlist) > 1:
-        #    tx2expr, txlist = check_combine_transcripts(tx2expr, txlist, simple_thresh)
         
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, steiger_thresh)
             if pval < nominal_thresh:
                 dir_perm_pval = (1.0 + sum([pval >= perm_i for perm_i in perm_peak_pvals])) / float(n_perms + 1)
                 #if np.var(perm_peak_pvals) == 0.0:
@@ -273,7 +260,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
 
                 perm_pvals[gene] = [dir_perm_pval, beta_perm_pval]
         else:
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, n_perms)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, n_perms, steiger_thresh)
         gene_results[gene] = [snp, fstat, pval]
     fnull.close()
     return gene_results, perm_pvals
