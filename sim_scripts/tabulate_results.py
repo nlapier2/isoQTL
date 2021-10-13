@@ -16,7 +16,7 @@ def parse_results_from_file(fname):
                 continue  # skip blank line
             else:
                 metric, value = line.strip().split(': ')
-                if value == 'N/A':
+                if metric == 'TP FP TN FN' or value == 'N/A':
                     continue
                 results[method][metric] += float(value)
     return results
@@ -42,15 +42,15 @@ def get_tabulated_results(all_fnames):
 res_dir = sys.argv[1]
 if not res_dir.endswith('/'):
     res_dir += '/'
-nom_fnames = glob.glob(res_dir + 'eval_nom_*.txt')
+#nom_fnames = glob.glob(res_dir + 'eval_nom_*.txt')
 perm_fnames = glob.glob(res_dir + 'eval_perm_*.txt')
-nom_results = get_tabulated_results(nom_fnames)
+#nom_results = get_tabulated_results(nom_fnames)
 perm_results = get_tabulated_results(perm_fnames)
 print('\nTabulated results for ' + res_dir)
-for method in nom_results:
-    print('\n' + method, 'nominal pass:')
-    for metric in nom_results[method]:
-        print(metric + ': ' + str(nom_results[method][metric]))
+#for method in nom_results:
+#    print('\n' + method, 'nominal pass:')
+#    for metric in nom_results[method]:
+#        print(metric + ': ' + str(nom_results[method][metric]))
 for method in perm_results:
     print('\n' + method, 'permutation pass:')
     for metric in perm_results[method]:
