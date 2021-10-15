@@ -229,7 +229,7 @@ def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
     window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
     bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
-    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
+    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines, index_col=2).T
     # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
     snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
     snp2geno = preprocess_snp2geno(tx2expr, snp2geno)

@@ -65,7 +65,14 @@ def get_betas_stderrs(snp_genos, tx2expr, txlist, genos_var, genos_mean):
     return np.array(betas), np.array(residuals)
 
 
-def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms):
+def cauchy_acat(pval_vec):
+    weights = [1.0 / len(pval_vec) for i in pval_vec]  # equal weights for now
+    stat = sum([weights[i] * np.tan((0.5 - pval_vec[i]) * np.pi) for i in range(len(pval_vec))])
+    pval = 0.5 - (np.arctan(stat / sum(weights))) / np.pi
+    return stat, pval
+
+
+def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, combine_method):
     cdef double peak_stat = 0.0
     cdef double peak_pval = 1.0
     cdef double pval = 0.0
@@ -83,7 +90,12 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         genos = np.array(snp2geno[snp]).astype(np.double)
         #print(snp)
         all_pvals = [linregress(tx2expr[tx], genos)[3] for tx in txlist]
-        stat, pval = combine_pvalues(all_pvals, method='fisher', weights=None)
+        if combine_method == 'cauchy':
+            stat, pval = cauchy_acat(all_pvals)
+        elif combine_method == 'min':
+            stat, pval = 0.0, min(all_pvals)
+        else:
+            stat, pval = combine_pvalues(all_pvals, method=combine_method, weights=None)
         if pval < peak_pval:
             peak_pval = pval
             peak_stat = stat
@@ -91,7 +103,12 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         if pval < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
                 all_pvals = [linregress(permuted_tx2expr[i][tx], genos)[3] for tx in txlist]
-                stat, pval = combine_pvalues(all_pvals, method='fisher', weights=None)
+                if combine_method == 'cauchy':
+                    stat, pval = cauchy_acat(all_pvals)
+                elif combine_method == 'min':
+                    stat, pval = 0.0, min(all_pvals)
+                else:
+                    stat, pval = combine_pvalues(all_pvals, method=combine_method, weights=None)
                 if pval < perm_peak_pvals[i]:
                     perm_peak_pvals[i] = pval
     return peak_snp, peak_stat, peak_pval, perm_peak_pvals
@@ -142,14 +159,14 @@ def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):
     window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
     bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
-    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
+    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines, index_col=2).T
     # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
     snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
     snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
     return snp2geno
 
 
-def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh):
+def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools, n_perms, nominal_thresh, combine_method):
     fnull = open(os.devnull, 'w')  # used to suppress some annoying bcftools warnings
     gene_results, perm_pvals = {}, {}
     for gene in gene_to_tx:
@@ -160,7 +177,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, combine_method)
             if pval < nominal_thresh:
                 dir_perm_pval = (1.0 + sum([pval >= perm_i for perm_i in perm_peak_pvals])) / float(n_perms + 1)
                 #if np.var(perm_peak_pvals) == 0.0:
@@ -173,7 +190,7 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
 
                 perm_pvals[gene] = [dir_perm_pval, beta_perm_pval]
         else:
-            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, n_perms)
+            snp, fstat, pval, perm_peak_pvals = find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, {}, n_perms, combine_method)
         gene_results[gene] = [snp, fstat, pval]
     fnull.close()
     return gene_results, perm_pvals

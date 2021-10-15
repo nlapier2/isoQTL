@@ -13,9 +13,12 @@ def parseargs():    # handle user arguments
     parser.add_argument('--gene_info', required=True, help='File with gene info from simulation script. Required.')
     parser.add_argument('--isoqtl', required=True, help='IsoQTL results file. Required.')
     parser.add_argument('--qtltools_gene', help='Path to qtltools gene-level results.')
-    parser.add_argument('--fisher_perm', help='Fisher permutation results file. Required.')
+    parser.add_argument('--fisher_perm', help='Fisher permutation results file.')
+    parser.add_argument('--min_perm', help='Min permutation results file.')
+    parser.add_argument('--cauchy_perm', help='Cauchy permutation results file.')
     parser.add_argument('--fisher_qtltools_iso', help='Fisher on QTLtools results file.')
     parser.add_argument('--min_qtltools_iso', help='Min-pval on QTLtools results file.')
+    parser.add_argument('--cauchy_qtltools_iso', help='Cauchy on QTLtools results file.')
     parser.add_argument('--threshold', default=0.05, type=float, help='P-value threshold for calling an eGene. Default: 0.05.')
     parser.add_argument('--use_perm', action='store_true', help='Use permuted p-value instead of nominal p-value, if available.')
     args = parser.parse_args()
@@ -145,6 +148,14 @@ if __name__ == '__main__':
     fisher_perm_egenes = read_isoqtl(args.fisher_perm, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, fisher_perm_egenes)
     calc_metrics_and_print('fisher_perm', tp, fp, tn, fn)
+
+    #min_perm_egenes = read_isoqtl(args.min_perm, args.use_perm, args.threshold)
+    #tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, min_perm_egenes)
+    #calc_metrics_and_print('min_perm', tp, fp, tn, fn)
+
+    cauchy_perm_egenes = read_isoqtl(args.cauchy_perm, args.use_perm, args.threshold)
+    tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, cauchy_perm_egenes)
+    calc_metrics_and_print('cauchy_perm', tp, fp, tn, fn)
     
     fisher_qtltools_iso_egenes = read_combined_pvals(args.fisher_qtltools_iso, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, fisher_qtltools_iso_egenes)
@@ -153,3 +164,7 @@ if __name__ == '__main__':
     min_qtltools_iso_egenes = read_combined_pvals(args.min_qtltools_iso, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, min_qtltools_iso_egenes)
     calc_metrics_and_print('min_qtltools_iso', tp, fp, tn, fn)
+
+    cauchy_qtltools_iso_egenes = read_combined_pvals(args.cauchy_qtltools_iso, args.use_perm, args.threshold)
+    tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, cauchy_qtltools_iso_egenes)
+    calc_metrics_and_print('cauchy_qtltools_iso', tp, fp, tn, fn)

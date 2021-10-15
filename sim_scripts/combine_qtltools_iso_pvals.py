@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 from scipy.stats import combine_pvalues
 
 
@@ -7,7 +8,7 @@ def parseargs():    # handle user arguments
     parser.add_argument('--qtltools', required=True, help='QTLtools permutation results file. Required.')
     parser.add_argument('--tx2gene', required=True, help='Tab-separated mapping transcripts (1st col) to their genes (2nd col).')
     parser.add_argument('--method', default='fisher',
-        choices=['fisher', 'min', 'tippett', 'pearson', 'stouffer'],
+        choices=['fisher', 'min', 'tippett', 'pearson', 'stouffer', 'cauchy'],
         help='Specify fisher or other method for combining pvals.')
     parser.add_argument('--output', default='combined_pvals_qtltools.txt',
         help='Output file name.')
@@ -39,11 +40,20 @@ def read_qtltools_res(qtltools_fname, tx2gene):
     return gene2pvals
 
 
+def cauchy_acat(pval_vec):
+    weights = [1.0 / len(pval_vec) for i in pval_vec]  # equal weights for now
+    stat = sum([weights[i] * np.tan((0.5 - pval_vec[i]) * np.pi) for i in range(len(pval_vec))])
+    pval = 0.5 - (np.arctan(stat / sum(weights))) / np.pi
+    return pval
+
+
 def combine_and_write(gene2pvals, method, out_fname):
     with(open(out_fname, 'w')) as outfile:
         for gene in gene2pvals:
             if method == 'min':
                 combined_pval = min(gene2pvals[gene])
+            elif method == 'cauchy':
+                combined_pval = cauchy_acat(gene2pvals[gene])
             else:
                 combined_pval = combine_pvalues(gene2pvals[gene], method=method, weights=None)[1]
             outfile.write(gene + '\t' + str(combined_pval) + '\n')

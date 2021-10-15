@@ -80,19 +80,20 @@ def read_pheno_file(pheno_fname, covariates):
     return tx2info, tx2expr, gene_to_tx
 
 
-def check_vcf(vcf, tx2expr):
+def check_vcf(vcf, bcftools, tx2expr):
     # check how many metadata lines there are and ensure that all phenotyped IDs are also genotyped
+    bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '--header-only'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    meta_lines = bcf_proc.communicate()[0].decode('utf-8').count('\n') - 1
     compressed = vcf.endswith('.gz')
     if compressed:
         infile = gzip.open(vcf, 'r')
     else:
         infile = open(vcf, 'r')
-    meta_lines = 0
     for line in infile:
         if compressed:
             line = line.decode('ascii')  # convert binary to string
         if not line.startswith('#CHROM'):
-            meta_lines += 1
+            continue
         else:  # line starts with #CHROM -- in other words, this is the header line
             splits = line.strip().split('\t')[9:]  # get a list of the people in this vcf
             id_dict = {iid: True for iid in splits}  # convert to dict for indexing speed
@@ -129,7 +130,7 @@ if __name__ == "__main__":
     args = parseargs()
     # print('Reading in phenotypes file...')
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno, args.covariates)
-    meta_lines = check_vcf(args.vcf, tx2expr)
+    meta_lines = check_vcf(args.vcf, args.bcftools, tx2expr)
     # print('Performing nominal pass...')
     nominal_results, perm_results = nominal_pass(
         args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.steiger)

@@ -15,6 +15,9 @@ def parseargs():    # handle user arguments
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
     parser.add_argument('--covariates', default='NONE', help='tsv file listing covariates to adjust phenotypes for.')
+    parser.add_argument('--method', default='fisher',
+        choices=['fisher', 'min', 'tippett', 'pearson', 'stouffer', 'cauchy'],
+        help='Specify fisher or other method for combining pvals.')
     parser.add_argument('--nominal', default=0.5, type=float,
                         help='Print genes with a nominal assocation p-value below this cutoff.')
     parser.add_argument('--output', default='isoqtl_results.tsv', help='Where to output results to.')
@@ -78,19 +81,20 @@ def read_pheno_file(pheno_fname, covariates):
     return tx2info, tx2expr, gene_to_tx
 
 
-def check_vcf(vcf, tx2expr):
+def check_vcf(vcf, bcftools, tx2expr):
     # check how many metadata lines there are and ensure that all phenotyped IDs are also genotyped
+    bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '--header-only'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    meta_lines = bcf_proc.communicate()[0].decode('utf-8').count('\n') - 1
     compressed = vcf.endswith('.gz')
     if compressed:
         infile = gzip.open(vcf, 'r')
     else:
         infile = open(vcf, 'r')
-    meta_lines = 0
     for line in infile:
         if compressed:
             line = line.decode('ascii')  # convert binary to string
         if not line.startswith('#CHROM'):
-            meta_lines += 1
+            continue
         else:  # line starts with #CHROM -- in other words, this is the header line
             splits = line.strip().split('\t')[9:]  # get a list of the people in this vcf
             id_dict = {iid: True for iid in splits}  # convert to dict for indexing speed
@@ -127,8 +131,8 @@ if __name__ == "__main__":
     args = parseargs()
     # print('Reading in phenotypes file...')
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno, args.covariates)
-    meta_lines = check_vcf(args.vcf, tx2expr)
+    meta_lines = check_vcf(args.vcf, args.bcftools, tx2expr)
     # print('Performing nominal pass...')
     nominal_results, perm_results = nominal_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal)
+        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.method)
     write_results(nominal_results, perm_results, args.output, args.nominal)
