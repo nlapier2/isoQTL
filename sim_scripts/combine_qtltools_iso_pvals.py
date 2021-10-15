@@ -31,7 +31,10 @@ def read_qtltools_res(qtltools_fname, tx2gene):
     with(open(qtltools_fname, 'r')) as infile:
         for line in infile:
             splits = line.strip().split(' ')
-            tx, pval = splits[0], float(splits[-1])
+            tx, pval = splits[0], splits[-1]
+            if pval == 'NA':
+                continue
+            pval = float(pval)
             gene = tx2gene[tx]
             if gene not in gene2pvals:
                 gene2pvals[gene] = [pval]
