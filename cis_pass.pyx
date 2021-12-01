@@ -15,31 +15,6 @@ DTYPE = np.double
 ctypedef np.double_t DTYPE_t
 
 
-def preprocess_snp2geno(tx2expr, snp2geno):
-    # remove genotypes for non-phenotyped individuals and remove "nan" entries
-    snp2geno = (snp2geno.T[list(tx2expr.index)]).T  # remove genotypes for non-phenotyped individuals
-    new_snp2geno = pd.DataFrame()
-    for i in snp2geno:
-        if snp2geno[i].isnull().values.any():
-            continue  # exclude SNPs with null genotypes
-        new_snp2geno[i] = pd.to_numeric(snp2geno[i])
-    return new_snp2geno
-
-
-def get_gene_window(txlist, tx2info, window):
-    chrom = ''  # chromosome this gene is on
-    first_start, last_end = 10**20, 0  # first start post & last end pos among all transcripts
-    for tx in txlist:
-        chrom, start, end, gid, strand = tx2info[tx]
-        if start < first_start:
-            first_start = start
-        if end > last_end:
-            last_end = end
-    # center window around first_start and last_end
-    window_start, window_end = first_start - window, last_end + window
-    return int(window_start), int(window_end), chrom
-
-
 cdef (double, double) get_beta(x, double var_x, double mean_x, y, double mean_y):
     cdef int n = len(x)
     cdef double cov_xy = 0.0
@@ -222,6 +197,32 @@ def permute_transcripts(tx2expr, txlist, n_perms):
             np.random.shuffle(permuted_dict[tx])
         tx_perms.append(permuted_dict)
     return np.transpose(np.array(tx_perms))
+
+
+def preprocess_snp2geno(tx2expr, snp2geno):
+    # remove genotypes for non-phenotyped individuals and remove "nan" entries
+    snp2geno = (snp2geno.T[list(tx2expr.index)]).T  # remove genotypes for non-phenotyped individuals
+    new_snp2geno = pd.DataFrame()
+    for i in snp2geno:
+        if snp2geno[i].isnull().values.any():
+            continue  # exclude SNPs with null genotypes
+        new_snp2geno[i] = pd.to_numeric(snp2geno[i])
+    return new_snp2geno
+
+
+def get_gene_window(txlist, tx2info, window):
+    chrom = ''  # chromosome this gene is on
+    first_start, last_end = 10**20, 0  # first start post & last end pos among all transcripts
+    for tx in txlist:
+        chrom, start, end, gid, strand = tx2info[tx]
+        if start < first_start:
+            first_start = start
+        if end > last_end:
+            last_end = end
+    # center window around TSS
+    # window_start, window_end = first_start - window, last_end + window
+    window_start, window_end = first_start - window, first_start + window
+    return int(window_start), int(window_end), chrom
 
 
 def get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window):

@@ -95,9 +95,10 @@ def get_gene_window(txlist, tx2info, window):
             first_start = start
         if end > last_end:
             last_end = end
-    # center window around first_start and last_end
-    window_start, window_end = first_start - window, last_end + window
-    return int(window_start), int(window_end), chrom
+    # center window around TSS
+    # window_start, window_end = first_start - window, last_end + window
+    window_start, window_end = first_start - window, first_start + window
+    return int(window_start), int(window_end), int(last_end), chrom
 
 
 def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff, args_h2shared):
@@ -138,10 +139,11 @@ def simulate_phenotypes(tx2expr, txlist, causal_snp_df, snp_h2g_eff, snp_h2i_eff
     return pd.DataFrame(sim_tx2expr), sim_gene2expr
     
     
-def make_gene_info(gene, tx2info, txlist, window_start, window_end, window):
+def make_gene_info(gene, tx2info, txlist, window_start, window_end, gene_end, window):
     tx_info = tx2info[txlist[0]]
     gene_chr, gene_strand = tx_info[0], tx_info[-1]
-    gene_start, gene_end = window_start + window, window_end - window
+    #gene_start, gene_end = window_start + window, window_end - window
+    gene_start = window_start + window
     gene_info = [gene_chr, gene_start, gene_end, gene, gene, gene_strand]
     return gene_info
 
@@ -176,8 +178,8 @@ def sim_causal_snps(snp2geno, num_causal, h2g, h2i, dropout_rate):
 
 
 def get_cis_snps(args, gene, gene2info, txlist, tx2info, tx2expr, meta_lines):
-    window_start, window_end, chrom = get_gene_window(txlist, tx2info, args.window)
-    gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, args.window)
+    window_start, window_end, gene_end, chrom = get_gene_window(txlist, tx2info, args.window)
+    gene2info[gene] = make_gene_info(gene, tx2info, txlist, window_start, window_end, gene_end, args.window)
     window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
     bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))

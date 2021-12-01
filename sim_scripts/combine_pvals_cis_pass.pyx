@@ -35,8 +35,9 @@ def get_gene_window(txlist, tx2info, window):
             first_start = start
         if end > last_end:
             last_end = end
-    # center window around first_start and last_end
-    window_start, window_end = first_start - window, last_end + window
+    # center window around TSS
+    # window_start, window_end = first_start - window, last_end + window
+    window_start, window_end = first_start - window, first_start + window
     return int(window_start), int(window_end), chrom
 
 
