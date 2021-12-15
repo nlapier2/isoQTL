@@ -1,7 +1,7 @@
 import argparse
 
 
-def parseargs():    # handle user arguments
+def parseargs():  # handle user arguments
     parser = argparse.ArgumentParser(description='isoQTL main script.')
     parser.add_argument('--gene_info', required=True, help='File with gene info from simulation script. Required.')
     parser.add_argument('--isoqtl', required=True, help='IsoQTL results file. Required.')
@@ -12,8 +12,10 @@ def parseargs():    # handle user arguments
     parser.add_argument('--fisher_qtltools_iso', help='Fisher on QTLtools results file.')
     parser.add_argument('--min_qtltools_iso', help='Min-pval on QTLtools results file.')
     parser.add_argument('--cauchy_qtltools_iso', help='Cauchy on QTLtools results file.')
-    parser.add_argument('--threshold', default=0.05, type=float, help='P-value threshold for calling an eGene. Default: 0.05.')
-    parser.add_argument('--use_perm', action='store_true', help='Use permuted p-value instead of nominal p-value, if available.')
+    parser.add_argument('--threshold', default=0.05, type=float,
+                        help='P-value threshold for calling an eGene. Default: 0.05.')
+    parser.add_argument('--use_perm', action='store_true',
+                        help='Use permuted p-value instead of nominal p-value, if available.')
     args = parser.parse_args()
     return args
 
@@ -24,8 +26,8 @@ def read_gene_info(gene_info):
         infile.readline()  # skip header line
         for line in infile:
             splits = line.strip().split('\t')
-            gene, h2g, h2i = splits[0], float(splits[2]), float(splits[3])
-            if h2g == 0.0 and h2i == 0.0:
+            gene, h2cis = splits[0], float(splits[2])
+            if h2cis == 0.0:
                 null_genes[gene] = True
             else:
                 egenes[gene] = True
@@ -67,7 +69,7 @@ def read_qtltools_gene(qtltools_gene_res, use_perm, threshold):
             gene = splits[0]
             if use_perm:
                 qtltools_gene_egenes[gene] = True
-                #pval = float(splits[-1])
+                # pval = float(splits[-1])
             else:
                 pval = float(splits[11])
                 if pval < threshold:
@@ -117,7 +119,7 @@ def calc_metrics_and_print(method_name, tp, fp, tn, fn):
         f1_score = 'N/A'
     else:
         f1_score = 2 * precision * recall / (precision + recall)
-        
+
     print('Results for ' + str(method_name) + ':\n')
     print('Precision: ' + str(precision))
     print('Recall: ' + str(recall))
@@ -129,31 +131,31 @@ def calc_metrics_and_print(method_name, tp, fp, tn, fn):
 if __name__ == '__main__':
     args = parseargs()
     true_egenes, null_genes = read_gene_info(args.gene_info)
-    
+
     isoqtl_egenes = read_isoqtl(args.isoqtl, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, isoqtl_egenes)
     calc_metrics_and_print('IsoQTL', tp, fp, tn, fn)
-    
+
     qtltools_gene_egenes = read_qtltools_gene(args.qtltools_gene, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, qtltools_gene_egenes)
     calc_metrics_and_print('QTLtools_gene', tp, fp, tn, fn)
-    
+
     fisher_perm_egenes = read_isoqtl(args.fisher_perm, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, fisher_perm_egenes)
     calc_metrics_and_print('fisher_perm', tp, fp, tn, fn)
 
-    #min_perm_egenes = read_isoqtl(args.min_perm, args.use_perm, args.threshold)
-    #tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, min_perm_egenes)
-    #calc_metrics_and_print('min_perm', tp, fp, tn, fn)
+    # min_perm_egenes = read_isoqtl(args.min_perm, args.use_perm, args.threshold)
+    # tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, min_perm_egenes)
+    # calc_metrics_and_print('min_perm', tp, fp, tn, fn)
 
     cauchy_perm_egenes = read_isoqtl(args.cauchy_perm, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, cauchy_perm_egenes)
     calc_metrics_and_print('cauchy_perm', tp, fp, tn, fn)
-    
+
     fisher_qtltools_iso_egenes = read_combined_pvals(args.fisher_qtltools_iso, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, fisher_qtltools_iso_egenes)
     calc_metrics_and_print('fisher_qtltools_iso', tp, fp, tn, fn)
-    
+
     min_qtltools_iso_egenes = read_combined_pvals(args.min_qtltools_iso, args.use_perm, args.threshold)
     tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, min_qtltools_iso_egenes)
     calc_metrics_and_print('min_qtltools_iso', tp, fp, tn, fn)
