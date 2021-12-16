@@ -55,19 +55,20 @@ def read_pheno_file(pheno_fname):
     return tx2info, tx2expr, gene_to_tx
 
 
-def check_vcf(vcf, tx2expr):
+def check_vcf(vcf, bcftools, tx2expr):
     # check how many metadata lines there are and ensure that all phenotyped IDs are also genotyped
+    bcf_proc = subprocess.Popen([bcftools, 'view', vcf, '--header-only'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    meta_lines = bcf_proc.communicate()[0].decode('utf-8').count('\n') - 1
     compressed = vcf.endswith('.gz')
     if compressed:
         infile = gzip.open(vcf, 'r')
     else:
         infile = open(vcf, 'r')
-    meta_lines = 0
     for line in infile:
         if compressed:
             line = line.decode('ascii')  # convert binary to string
         if not line.startswith('#CHROM'):
-            meta_lines += 1
+            continue
         else:  # line starts with #CHROM -- in other words, this is the header line
             splits = line.strip().split('\t')[9:]  # get a list of the people in this vcf
             id_dict = {iid: True for iid in splits}  # convert to dict for indexing speed
@@ -228,7 +229,7 @@ def get_cis_snps(args, gene, gene2info, txlist, tx2info, tx2expr, meta_lines):
     window_str = str(chrom) + ':' + str(window_start) + '-' + str(window_end)
     bcf_proc = subprocess.Popen([args.bcftools, 'view', args.vcf, '-r', window_str], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     bcf_out = StringIO(bcf_proc.communicate()[0].decode('utf-8'))
-    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines+4, index_col=2).T
+    gene_window_snps = pd.read_csv(bcf_out, sep='\t', header=meta_lines, index_col=2).T
     # read in SNPs in the window and clear out null SNPs and non-phenotyped individuals
     snp2info, snp2geno = gene_window_snps.iloc[:8], gene_window_snps.iloc[8:]
     snp2geno = preprocess_snp2geno(tx2expr, snp2geno)
@@ -244,6 +245,9 @@ def simulation_pass(args, tx2info, tx2expr, gene_to_tx, meta_lines):
             continue
         # get window around gene and subset the vcf for that window using bcftools
         snp2geno, gene2info = get_cis_snps(args, gene, gene2info, txlist, tx2info, tx2expr, meta_lines)
+        if len(list(snp2geno.keys())) < 5:
+            del gene2info[gene]
+            continue  # ignore genes with insufficient number of cis SNPs
         # randomly select causal snps
         causal_snp_names, causal_snp_df, snp_h2_eff, dropout = sim_causal_snps(snp2geno, args.num_causal, args.h2cis, args.dropout_rate)
         # simultate phenotypes
@@ -312,7 +316,7 @@ if __name__ == "__main__":
         sys.exit('Error: h2 args must be between 0.0 and 1.0 and sum to 1 or less.')
     
     tx2info, tx2expr, gene_to_tx = read_pheno_file(args.pheno)
-    meta_lines = check_vcf(args.vcf, tx2expr)
+    meta_lines = check_vcf(args.vcf, args.bcftools, tx2expr)
     sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp = simulation_pass(
         args, tx2info, tx2expr, gene_to_tx, meta_lines)
     write_results(tx2info, sim_tx2expr, sim_gene2expr, gene2info, gene2causalsnp, args.output)
