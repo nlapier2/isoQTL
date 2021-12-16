@@ -14,16 +14,21 @@ def parseargs():    # handle user arguments
     parser.add_argument('--vcf', required=True, help='VCF or BCF file with genotypes. Required.')
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
-    parser.add_argument('--dropout_rate', default=0.25, type=float, help='Percent of genes to randomly set to zero heritability.')
+    parser.add_argument('--dropout_rate', default=0.25, type=float,
+                        help='Percent of genes to randomly set to zero heritability.')
+    parser.add_argument('--dropout_iso', default=0.0, type=float,
+                        help='Percent of isoforms to randomly set to zero heritability.')
     parser.add_argument('--h2cis', default=0.1, type=float, help='Heritability of cis SNPs on gene expression.')
-    parser.add_argument('--h2noncis', default=0.5, type=float, help='Heritability of non-cis effects on gene expression.')
+    parser.add_argument('--h2noncis', default=0.5, type=float,
+                        help='Heritability of non-cis effects on gene expression.')
     parser.add_argument('--max_corr', default=0.64, type=float, help='Max r^2 betweeen isoforms.')
     parser.add_argument('--max_corr_env', default=0.64, type=float, help='Max r^2 between environments.')
     parser.add_argument('--min_corr', default=0.04, type=float, help='Min r^2 between isoforms.')
     parser.add_argument('--min_corr_env', default=0.04, type=float, help='Min r^2 between environments.')
     parser.add_argument('--num_causal', default=-1, type=int,
         help='Specify a fixed number of causal SNPs per gene.')
-    parser.add_argument('--num_iso', default=-1, type=int, help='Use to include genes only with a certain number of isoforms.')
+    parser.add_argument('--num_iso', default=-1, type=int,
+                        help='Use to include genes only with a certain number of isoforms.')
     parser.add_argument('--output', default='simulated_phenos', help='Output file base name.')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
@@ -154,9 +159,15 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
         noncis_effect = sim_iso_effect(num_iso, args.h2noncis, args.min_corr_env, args.max_corr_env)
         
         # genetic component of expression = SNP * genetic effect for each tx
+        all_iso_dropped = True
         for i in range(len(txlist)):
             tx = txlist[i]
-            cis_component = causal_snp_df[snp] * cis_effect[i]
+            if random.random() < args.dropout_iso and (not all_iso_dropped or i + 1 != len(txlist)):
+                # randomly drop out isoforms, but keep at least one to avoid having zero effect on all isoforms
+                cis_component = causal_snp_df[snp] * 0.0
+            else:
+                cis_component = causal_snp_df[snp] * cis_effect[i]
+                all_iso_dropped = False
             noncis_component = noncis_effect[i] * np.ones(len(causal_snp_df[snp]))
             if tx not in sim_tx2expr:
                 sim_tx2expr[tx] = cis_component + noncis_component
