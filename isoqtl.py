@@ -15,13 +15,13 @@ def parseargs():    # handle user arguments
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
     parser.add_argument('--covariates', default='NONE', help='tsv file listing covariates to adjust phenotypes for.')
+    parser.add_argument('--methods', nargs='+', default=['wilks', 'fisher', 'min', 'cauchy'],
+        choices=['wilks', 'fisher', 'min', 'cauchy'], help='Specify method to obtain gene-level p-value.')
     parser.add_argument('--nominal', default=0.5, type=float,
                         help='Print genes with a nominal assocation p-value below this cutoff.')
-    parser.add_argument('--output', default='isoqtl_results.tsv', help='Where to output results to.')
+    parser.add_argument('--output', default='eqtl_results', help='Base name for results.')
     parser.add_argument('--permute', default=100, type=int,
                         help='Number of permutations to do for a permutation pass. Set to 0 to do nominal pass only.')
-    parser.add_argument('--steiger', default=0.05, type=float,
-                        help='P-value threshold for Steiger test for switching to simple linear regression.')
     parser.add_argument('--window', default=50000, type=int,
                         help='Size of window in bp around start position of phenotypes.')
     args = parser.parse_args()
@@ -133,5 +133,7 @@ if __name__ == "__main__":
     meta_lines = check_vcf(args.vcf, args.bcftools, tx2expr)
     # print('Performing nominal pass...')
     nominal_results, perm_results = nominal_pass(
-        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.steiger)
-    write_results(nominal_results, perm_results, args.output, args.nominal)
+        args.vcf, tx2info, tx2expr, gene_to_tx, meta_lines, args.window, args.bcftools, args.permute, args.nominal, args.methods)
+    for m in args.methods:
+        outname = args.output + '.' + m + '.tsv'
+        write_results(nominal_results[m], perm_results[m], outname, args.nominal)
