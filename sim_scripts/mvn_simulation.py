@@ -6,6 +6,7 @@ import subprocess
 import sys
 import pandas as pd
 import numpy as np
+from scipy.stats import matrix_normal
 from io import StringIO
 
 
@@ -132,9 +133,9 @@ def sim_iso_effect(num_iso, h2, min_corr, max_corr):
     # simulate correlated effect sizes on all isoforms
     min_eff = h2 / 2
     if num_iso == 1:
-        iso_effect = np.random.normal(0, np.sqrt(h2))
+        iso_effect = np.random.normal(0, h2)
         while abs(iso_effect) < min_eff:
-            iso_effect = np.random.normal(0, np.sqrt(h2))
+            iso_effect = np.random.normal(0, h2)
         iso_effect = [iso_effect]
     else:
         if h2 == 0.0:
@@ -143,10 +144,25 @@ def sim_iso_effect(num_iso, h2, min_corr, max_corr):
             mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
             while min(np.linalg.eigh(covar_mat)[0]) < 0:  # ensure covar_mat is positive semidefinite
                 mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
-            iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * np.sqrt(h2))
+            iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
             while min([abs(i) for i in iso_effect]) < min_eff:
-                iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * np.sqrt(h2))
+                iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
     return iso_effect
+    
+    
+def sim_noncis_matrix(num_iso, num_people, h2, min_corr, max_corr):
+    if h2 == 0.0:
+        return np.zeros((num_iso, num_people))
+    mean_vec, iso_covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
+    mean_vec, ppl_covar_mat = create_covar_mat(num_people, 0.99, 0.99)
+    iso_covar_mat = np.dot(iso_covar_mat, iso_covar_mat.T)
+    iso_covar_mat = iso_covar_mat / np.max(iso_covar_mat)
+    ppl_covar_mat = np.dot(ppl_covar_mat, ppl_covar_mat.T)
+    ppl_covar_mat = ppl_covar_mat / np.max(ppl_covar_mat)
+    # iso_covar_mat, ppl_covar_mat = np.sqrt(h2) * iso_covar_mat, np.sqrt(h2) * ppl_covar_mat  # scale by h2
+    # we don't use mean_vec here; scipy matrix normal default mean is zero matrix
+    noncis_effect_mat = matrix_normal.rvs(rowcov=iso_covar_mat, colcov=ppl_covar_mat)
+    return noncis_effect_mat * np.sqrt(h2)
 
 
 def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
@@ -157,7 +173,9 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
     for snp in causal_snp_df:
         snp_h2 = snp_h2_eff[snp]
         cis_effect = sim_iso_effect(num_iso, snp_h2, args.min_corr, args.max_corr)
-        noncis_effect = sim_iso_effect(num_iso, args.h2noncis, args.min_corr_env, args.max_corr_env)
+        # noncis_effect = sim_iso_effect(num_iso, args.h2noncis, args.min_corr_env, args.max_corr_env)
+        num_people = len(causal_snp_df[snp])
+        noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
         
         # genetic component of expression = SNP * genetic effect for each tx
         all_iso_dropped = True
@@ -169,7 +187,8 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
             else:
                 cis_component = causal_snp_df[snp] * cis_effect[i]
                 all_iso_dropped = False
-            noncis_component = noncis_effect[i] * np.ones(len(causal_snp_df[snp]))
+            # noncis_component = noncis_effect[i] * np.ones(len(causal_snp_df[snp]))
+            noncis_component = noncis_effect_mat[i]
             if tx not in sim_tx2expr:
                 sim_tx2expr[tx] = cis_component + noncis_component
             else:
@@ -179,7 +198,7 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
     for tx in sim_tx2expr:
         cis_plus_noncis = sim_tx2expr[tx]
         h2noise = 1.0 - total_h2 - args.h2noncis
-        noise_component = np.random.normal(0, np.sqrt(h2noise), size=len(cis_plus_noncis))  # draw noise for each person
+        noise_component = np.random.normal(0, h2noise, size=len(cis_plus_noncis))  # draw noise for each person
         sim_expr = cis_plus_noncis + noise_component
         # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
         sim_tx2expr[tx] = sim_expr  # final iso expression is sum of components
