@@ -169,13 +169,15 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
     sim_tx2expr, sim_gene2expr = {}, np.zeros(len(causal_snp_df))
     all_snp_h2 = [snp_h2_eff[snp] for snp in snp_h2_eff]
     num_iso, total_h2 = len(txlist), sum(all_snp_h2)
+    num_people = len(causal_snp_df)
+    noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
     # first sim genetic component: the effects of the SNPs on genes & isoforms
     for snp in causal_snp_df:
         snp_h2 = snp_h2_eff[snp]
         cis_effect = sim_iso_effect(num_iso, snp_h2, args.min_corr, args.max_corr)
         # noncis_effect = sim_iso_effect(num_iso, args.h2noncis, args.min_corr_env, args.max_corr_env)
-        num_people = len(causal_snp_df[snp])
-        noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
+        # num_people = len(causal_snp_df[snp])
+        # noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
         
         # genetic component of expression = SNP * genetic effect for each tx
         all_iso_dropped = True
@@ -188,11 +190,16 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
                 cis_component = causal_snp_df[snp] * cis_effect[i]
                 all_iso_dropped = False
             # noncis_component = noncis_effect[i] * np.ones(len(causal_snp_df[snp]))
-            noncis_component = noncis_effect_mat[i]
+            # noncis_component = noncis_effect_mat[i]
             if tx not in sim_tx2expr:
-                sim_tx2expr[tx] = cis_component + noncis_component
+                sim_tx2expr[tx] = cis_component #+ noncis_component
             else:
-                sim_tx2expr[tx] += (cis_component + noncis_component)
+                sim_tx2expr[tx] += (cis_component)# + noncis_component)
+    # add in noncis effects
+    for i in range(len(txlist)):
+        tx = txlist[i]
+        if tx in sim_tx2expr:
+            sim_tx2expr[tx] += noncis_effect_mat[i]
 
     # now add in the noise and shared components
     for tx in sim_tx2expr:
