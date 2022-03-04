@@ -15,8 +15,8 @@ def parseargs():    # handle user arguments
     parser.add_argument('--pheno', required=True, help='BED file or tsv file with transcript expression levels.')
     parser.add_argument('--bcftools', default='bcftools', help='Path to bcftools executable ("bcftools" by default).')
     parser.add_argument('--covariates', default='NONE', help='tsv file listing covariates to adjust phenotypes for.')
-    parser.add_argument('--methods', nargs='+', default=['wilks', 'fisher', 'min', 'cauchy'],
-        choices=['wilks', 'fisher', 'min', 'cauchy'], help='Specify method to obtain gene-level p-value.')
+    parser.add_argument('--methods', nargs='+', default=['wilks', 'fisher', 'min', 'cauchy', 'ftest'],
+        choices=['wilks', 'fisher', 'min', 'cauchy', 'ftest'], help='Specify method to obtain gene-level p-value.')
     parser.add_argument('--nominal', default=0.5, type=float,
                         help='Print genes with a nominal assocation p-value below this cutoff.')
     parser.add_argument('--output', default='eqtl_results', help='Base name for results.')

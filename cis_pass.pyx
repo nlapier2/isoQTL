@@ -1,14 +1,13 @@
 import os
 import subprocess
 import sys
-import pandas as pd
 from io import StringIO
-
+import pandas as pd
+import statsmodels.formula.api as smf
 from scipy.special import betaln as betaln_func
 from scipy.special import ncfdtr
 from scipy.stats import linregress, beta, chi2, norm, t, combine_pvalues
 from scipy.optimize import minimize
-
 import numpy as np
 cimport numpy as np
 DTYPE = np.double
@@ -82,6 +81,15 @@ cdef (double, double) cauchy_acat(pval_vec):
     return stat, pval
 
 
+cdef (double, double) multi_regress_f_test(tx2expr, txlist, snp2geno, snp):
+    # perform reverse (multiple) regression of snp on isoforms and get f statistic
+    this_tx2expr = tx2expr
+    this_tx2expr[snp] = snp2geno[snp]  # merge snp into tx2expr df so we can run statsmodels regression
+    formula = snp + ' ~ ' + ' + '.join(['Q("' + i + '")' for i in txlist])  # formula for statsmodels regression
+    reg_res = smf.ols(formula, data=this_tx2expr).fit()
+    return reg_res.fvalue, reg_res.f_pvalue
+
+
 def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, methods):
     # initialize returned variables indicating peak associations
     peak_snps, peak_stats, peak_pvals, perm_peak_pvals = {}, {}, {}, {}
@@ -121,6 +129,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                 if m == 'wilks':
                     # det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
                     stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+                elif m == 'ftest':
+                    stat, pval = multi_regress_f_test(tx2expr, txlist, snp2geno, snp)
                 elif m == 'min':
                     stat, pval = 0.0, min(all_pvals)
                 elif m == 'cauchy':
@@ -133,7 +143,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                 peak_snps[m] = snp
         
         # compute permutation pass
-        if pval < nominal_thresh:
+        if min([peak_pvals[key] for key in peak_pvals]) < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
                 if len(txlist) == 1:
                     beta, inter, r, pval, stderr = linregress(permuted_tx2expr[i][txlist[0]], genos)
@@ -143,6 +153,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                     if len(txlist) != 1:
                         if m == 'wilks':
                             stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
+                        elif m == 'ftest':
+                            stat, pval = multi_regress_f_test(permuted_tx2expr[i], txlist, snp2geno, snp)
                         elif m == 'min':
                             stat, pval = 0.0, min(all_pvals)
                         elif m == 'cauchy':

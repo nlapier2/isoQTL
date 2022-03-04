@@ -26,6 +26,7 @@ def parseargs():    # handle user arguments
     parser.add_argument('--max_corr_env', default=0.64, type=float, help='Max r^2 between environments.')
     parser.add_argument('--min_corr', default=0.04, type=float, help='Min r^2 between isoforms.')
     parser.add_argument('--min_corr_env', default=0.04, type=float, help='Min r^2 between environments.')
+    parser.add_argument('--neg_pct', default=0.5, type=float, help='Percent of isoforms negatively correlated.')
     parser.add_argument('--num_causal', default=-1, type=int,
         help='Specify a fixed number of causal SNPs per gene.')
     parser.add_argument('--num_iso', default=-1, type=int,
@@ -111,7 +112,7 @@ def get_gene_window(txlist, tx2info, window):
     return int(window_start), int(window_end), int(last_end), chrom
  
 
-def create_covar_mat(num_iso, args_min_corr, args_max_corr):
+def create_covar_mat(num_iso, args_min_corr, args_max_corr, args_neg_pct):
     # simulate MVN covariance matrix, given min and max covars
     mean_vec, covar_mat = np.zeros(num_iso), np.zeros((num_iso, num_iso))
     sqrt_min, sqrt_max = np.sqrt(args_min_corr), np.sqrt(args_max_corr)
@@ -121,7 +122,7 @@ def create_covar_mat(num_iso, args_min_corr, args_max_corr):
                 covar_mat[i][j] = 1.0
             elif j > i:
                 choice = np.random.uniform(sqrt_min, sqrt_max)
-                if np.random.uniform(0.0, 1.0) >= 0.5:
+                if np.random.uniform(0.0, 1.0) <= args_neg_pct:
                     choice *= -1.0  # random sign
                 covar_mat[i][j] = choice
             else:
@@ -129,7 +130,7 @@ def create_covar_mat(num_iso, args_min_corr, args_max_corr):
     return mean_vec, covar_mat
 
 
-def sim_iso_effect(num_iso, h2, min_corr, max_corr):
+def sim_iso_effect(num_iso, h2, min_corr, max_corr, neg_pct):
     # simulate correlated effect sizes on all isoforms
     min_eff = h2 / 2
     if num_iso == 1:
@@ -141,20 +142,20 @@ def sim_iso_effect(num_iso, h2, min_corr, max_corr):
         if h2 == 0.0:
             iso_effect = np.zeros(num_iso)
         else:
-            mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
+            mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr, neg_pct)
             while min(np.linalg.eigh(covar_mat)[0]) < 0:  # ensure covar_mat is positive semidefinite
-                mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
+                mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr, neg_pct)
             iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
             while min([abs(i) for i in iso_effect]) < min_eff:
                 iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
     return iso_effect
     
     
-def sim_noncis_matrix(num_iso, num_people, h2, min_corr, max_corr):
+def sim_noncis_matrix(num_iso, num_people, h2, min_corr, max_corr, neg_pct):
     if h2 == 0.0:
         return np.zeros((num_iso, num_people))
-    mean_vec, iso_covar_mat = create_covar_mat(num_iso, min_corr, max_corr)
-    mean_vec, ppl_covar_mat = create_covar_mat(num_people, 0.99, 0.99)
+    mean_vec, iso_covar_mat = create_covar_mat(num_iso, min_corr, max_corr, neg_pct)
+    mean_vec, ppl_covar_mat = create_covar_mat(num_people, 0.99, 0.99, neg_pct)
     iso_covar_mat = np.dot(iso_covar_mat, iso_covar_mat.T)
     iso_covar_mat = iso_covar_mat / np.max(iso_covar_mat)
     ppl_covar_mat = np.dot(ppl_covar_mat, ppl_covar_mat.T)
@@ -170,11 +171,11 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
     all_snp_h2 = [snp_h2_eff[snp] for snp in snp_h2_eff]
     num_iso, total_h2 = len(txlist), sum(all_snp_h2)
     num_people = len(causal_snp_df)
-    noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
+    noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env, args.neg_pct)
     # first sim genetic component: the effects of the SNPs on genes & isoforms
     for snp in causal_snp_df:
         snp_h2 = snp_h2_eff[snp]
-        cis_effect = sim_iso_effect(num_iso, snp_h2, args.min_corr, args.max_corr)
+        cis_effect = sim_iso_effect(num_iso, snp_h2, args.min_corr, args.max_corr, args.neg_pct)
         # noncis_effect = sim_iso_effect(num_iso, args.h2noncis, args.min_corr_env, args.max_corr_env)
         # num_people = len(causal_snp_df[snp])
         # noncis_effect_mat = sim_noncis_matrix(num_iso, num_people, args.h2noncis, args.min_corr_env, args.max_corr_env)
