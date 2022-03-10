@@ -20,7 +20,7 @@ def parseargs():    # handle user arguments
     parser.add_argument('--dropout_iso', default=0.0, type=float,
                         help='Percent of isoforms to randomly set to zero heritability.')
     parser.add_argument('--h2cis', default=0.1, type=float, help='Heritability of cis SNPs on gene expression.')
-    parser.add_argument('--h2noncis', default=0.5, type=float,
+    parser.add_argument('--h2noncis', default=0.0, type=float,
                         help='Heritability of non-cis effects on gene expression.')
     parser.add_argument('--max_corr', default=0.64, type=float, help='Max r^2 betweeen isoforms.')
     parser.add_argument('--max_corr_env', default=0.64, type=float, help='Max r^2 between environments.')

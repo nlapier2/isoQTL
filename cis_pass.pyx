@@ -6,7 +6,7 @@ import pandas as pd
 import statsmodels.formula.api as smf
 from scipy.special import betaln as betaln_func
 from scipy.special import ncfdtr
-from scipy.stats import linregress, beta, chi2, norm, t, combine_pvalues
+from scipy.stats import linregress, beta, chi2, norm, t, f, combine_pvalues
 from scipy.optimize import minimize
 import numpy as np
 cimport numpy as np
@@ -90,6 +90,36 @@ cdef (double, double) multi_regress_f_test(tx2expr, txlist, snp2geno, snp):
     return reg_res.fvalue, reg_res.f_pvalue
 
 
+def precomp_xtx_inv(tx2expr, txlist):
+    mat = [tx2expr[tx] for tx in txlist]
+    mat.append(np.ones(len(mat[0])))
+    x = np.array(mat).T  # add intercept term
+    # x = np.array([tx2expr[tx] for tx in txlist])
+    return x, np.linalg.inv(np.matmul(x.T, x))
+
+
+cdef (double, double) multi_regress_f_test_given_xtx(y, x, xtx_inv):
+    # compute OLS effect estimates for multiple regression
+    dof1, dof2 = len(x[0]) - 1, len(y) - len(x[0])
+    xty = np.matmul(x.T, y)
+    betahat = np.matmul(xtx_inv, xty)
+    # compute standard errors of OLS estimates
+    yhat = np.matmul(x, betahat)
+    resid = y - yhat
+    resid_var = sum([i**2 for i in resid]) / dof2
+    mat = resid_var * xtx_inv
+    betahat_stderrs = np.array([mat[i][i] ** 2 for i in range(len(mat))])
+    # compute F statistic
+    rss_full = sum([i**2 for i in resid])
+    resid_intercept = y - np.mean(y)
+    rss_intercept = sum([i**2 for i in resid_intercept])
+    numerator = (rss_intercept - rss_full) / dof1
+    denominator = rss_full / dof2
+    stat = numerator / denominator
+    pval = f.sf(stat, dof1, dof2)
+    return stat, pval
+
+
 def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n_perms, methods):
     # initialize returned variables indicating peak associations
     peak_snps, peak_stats, peak_pvals, perm_peak_pvals = {}, {}, {}, {}
@@ -98,6 +128,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         peak_stats[m] = 0.0
         peak_pvals[m] = 1.0
         perm_peak_pvals[m] = np.ones(len(permuted_tx2expr)) * 0.99999999
+    if len(snp2geno) == 0:
+        return peak_snps, peak_stats, peak_pvals, perm_peak_pvals
     
     # initialize variables for computations
     cdef double pval = 0.0
@@ -111,6 +143,11 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
     cdef int n_genos = len(snp2geno.iloc[:, 0])
     cdef int dof = n_genos - 2
     det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, n_genos, len(txlist))
+    if 'ftest' in methods:
+        x, xtx_inv = precomp_xtx_inv(tx2expr, txlist)
+        permuted_xtx_inv = [precomp_xtx_inv(permuted_tx2expr[i], txlist) for i in range(len(permuted_tx2expr))]
+    else:
+        xtx_inv, permuted_xtx_inv = 0, 0
 
     # go through each SNP to find strongest p-value for each method
     for snp in snp2geno:
@@ -130,7 +167,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                     # det_resid_intercept, multiplier, chi2_dof = precomp_wilks_bartlett(tx2expr, txlist, len(genos), len(txlist))
                     stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
                 elif m == 'ftest':
-                    stat, pval = multi_regress_f_test(tx2expr, txlist, snp2geno, snp)
+                    #stat, pval = multi_regress_f_test(tx2expr, txlist, snp2geno, snp)
+                    stat, pval = multi_regress_f_test_given_xtx(snp2geno[snp], x, xtx_inv)
                 elif m == 'min':
                     stat, pval = 0.0, min(all_pvals)
                 elif m == 'cauchy':
@@ -154,7 +192,9 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                         if m == 'wilks':
                             stat, pval = wilks_bartlett(np.transpose(residuals), det_resid_intercept, multiplier, chi2_dof, len(genos))
                         elif m == 'ftest':
-                            stat, pval = multi_regress_f_test(permuted_tx2expr[i], txlist, snp2geno, snp)
+                            #stat, pval = multi_regress_f_test(permuted_tx2expr[i], txlist, snp2geno, snp)
+                            perm_x, perm_xtx_inv = permuted_xtx_inv[i]
+                            stat, pval = multi_regress_f_test_given_xtx(snp2geno[snp], perm_x, perm_xtx_inv)
                         elif m == 'min':
                             stat, pval = 0.0, min(all_pvals)
                         elif m == 'cauchy':
