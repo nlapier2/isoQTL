@@ -7,6 +7,9 @@ def parseargs():  # handle user arguments
     parser.add_argument('--wilks', help='Wilks-Bartlett results file.')
     parser.add_argument('--ftest', help='F-test results file.')
     parser.add_argument('--qtltools_gene', help='Path to qtltools gene-level results.')
+    parser.add_argument('--qtltools_grpbest', help='Path to qtltools grpbest gene-level results.')
+    parser.add_argument('--qtltools_grppca1', help='Path to qtltools grppca1 gene-level results.')
+    parser.add_argument('--qtltools_grpmean', help='Path to qtltools grpmean gene-level results.')
     parser.add_argument('--fisher_perm', help='Fisher permutation results file.')
     parser.add_argument('--min_perm', help='Min permutation results file.')
     parser.add_argument('--cauchy_perm', help='Cauchy permutation results file.')
@@ -132,6 +135,21 @@ if __name__ == '__main__':
         qtltools_gene_egenes = read_qtltools_gene(args.qtltools_gene, args.use_perm, args.threshold)
         tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, qtltools_gene_egenes)
         calc_metrics_and_print('QTLtools_gene', tp, fp, tn, fn)
+
+    if args.qtltools_grpbest is not None:
+        qtltools_grpbest_egenes = read_qtltools_gene(args.qtltools_grpbest, args.use_perm, args.threshold)
+        tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, qtltools_grpbest_egenes)
+        calc_metrics_and_print('QTLtools_grpbest', tp, fp, tn, fn)
+
+    if args.qtltools_grppca1 is not None:
+        qtltools_grppca1_egenes = read_qtltools_gene(args.qtltools_grppca1, args.use_perm, args.threshold)
+        tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, qtltools_grppca1_egenes)
+        calc_metrics_and_print('QTLtools_grppca1', tp, fp, tn, fn)
+
+    if args.qtltools_grpmean is not None:
+        qtltools_grpmean_egenes = read_qtltools_gene(args.qtltools_grpmean, args.use_perm, args.threshold)
+        tp, fp, tn, fn = calc_tp_fp_tn_fn(true_egenes, null_genes, qtltools_grpmean_egenes)
+        calc_metrics_and_print('QTLtools_grpmean', tp, fp, tn, fn)
 
     if args.ftest is not None:
         ftest_egenes = read_isoqtl(args.ftest, args.use_perm, args.threshold)

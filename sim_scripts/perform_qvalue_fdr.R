@@ -24,6 +24,12 @@ if(opt_method == 'IsoQTL' || opt_method == 'fisher_perm') {
 } else if(opt_method == 'combined_qtltools') {
         d=d[!is.na(d$V2),]
         d$qval=qvalue(d$V2, lambda=0)$qvalue
+} else if(opt_method == 'QTLtools_grp') {
+    d=d[!is.na(d$V22),]
+    d$qval=qvalue(d$V22, lambda=0)$qvalue
+} else if(opt_method == 'QTLtools_grp_mean') {
+    d=d[!is.na(d$V21),]
+    d$qval=qvalue(d$V21, lambda=0)$qvalue
 }
 
 write.table(d[which(d$qval <= opt_fdr), ], opt_output, quote=FALSE, row.names=FALSE, col.names=FALSE)
