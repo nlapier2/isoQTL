@@ -134,9 +134,9 @@ def sim_iso_effect(num_iso, h2, min_corr, max_corr, neg_pct):
     # simulate correlated effect sizes on all isoforms
     min_eff = h2 / 2
     if num_iso == 1:
-        iso_effect = np.random.normal(0, h2)
+        iso_effect = np.random.normal(0, np.sqrt(h2))
         while abs(iso_effect) < min_eff:
-            iso_effect = np.random.normal(0, h2)
+            iso_effect = np.random.normal(0, np.sqrt(h2))
         iso_effect = [iso_effect]
     else:
         if h2 == 0.0:
@@ -145,9 +145,9 @@ def sim_iso_effect(num_iso, h2, min_corr, max_corr, neg_pct):
             mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr, neg_pct)
             while min(np.linalg.eigh(covar_mat)[0]) < 0:  # ensure covar_mat is positive semidefinite
                 mean_vec, covar_mat = create_covar_mat(num_iso, min_corr, max_corr, neg_pct)
-            iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
+            iso_effect = np.random.multivariate_normal(mean_vec, covar_mat) * np.sqrt(h2)
             while min([abs(i) for i in iso_effect]) < min_eff:
-                iso_effect = np.random.multivariate_normal(mean_vec, covar_mat * h2)
+                iso_effect = np.random.multivariate_normal(mean_vec, covar_mat) * np.sqrt(h2)
     return iso_effect
     
     
@@ -206,7 +206,7 @@ def simulate_phenotypes(args, txlist, causal_snp_df, snp_h2_eff):
     for tx in sim_tx2expr:
         cis_plus_noncis = sim_tx2expr[tx]
         h2noise = 1.0 - total_h2 - args.h2noncis
-        noise_component = np.random.normal(0, h2noise, size=len(cis_plus_noncis))  # draw noise for each person
+        noise_component = np.random.normal(0, np.sqrt(h2noise), size=len(cis_plus_noncis))  # draw noise for each person
         sim_expr = cis_plus_noncis + noise_component
         # std_sim_expr = (sim_expr - np.mean(sim_expr)) / np.std(sim_expr)
         sim_tx2expr[tx] = sim_expr  # final iso expression is sum of components
