@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import numpy as np
 from scipy.stats import combine_pvalues
 
@@ -6,7 +7,7 @@ from scipy.stats import combine_pvalues
 def parseargs():    # handle user arguments
     parser = argparse.ArgumentParser(description='Script for combining iso-level p-values from QTLtools.')
     parser.add_argument('--qtltools', required=True, help='QTLtools permutation results file. Required.')
-    parser.add_argument('--tx2gene', required=True, help='Tab-separated mapping transcripts (1st col) to their genes (2nd col).')
+    parser.add_argument('--bed', required=True, help='Bed file for mapping transcripts to genes.')
     parser.add_argument('--method', default='fisher',
         choices=['fisher', 'min', 'tippett', 'pearson', 'stouffer', 'cauchy'],
         help='Specify fisher or other method for combining pvals.')
@@ -16,12 +17,14 @@ def parseargs():    # handle user arguments
     return args
 
 
-def read_tx2gene(tx2gene_fname):
+def read_bed(bed_fname):
     tx2gene = {}
-    with(open(tx2gene_fname, 'r')) as infile:
+    with(gzip.open(bed_fname, 'r')) as infile:
+        infile.readline()  # skip header
         for line in infile:
-            splits = line.strip().split('\t')
-            tx, gene = splits[0], splits[1]
+            splits = line.decode().strip().split('\t')
+            tx, gene = splits[3], splits[4]
+            tx = tx.split('.')[0]
             tx2gene[tx] = gene
     return tx2gene
 
@@ -32,6 +35,7 @@ def read_qtltools_res(qtltools_fname, tx2gene):
         for line in infile:
             splits = line.strip().split(' ')
             tx, pval = splits[0], splits[-1]
+            tx = tx.split('.')[0]
             if pval == 'NA':
                 continue
             pval = float(pval)
@@ -64,6 +68,6 @@ def combine_and_write(gene2pvals, method, out_fname):
 
 if __name__ == "__main__":
     args = parseargs()
-    tx2gene = read_tx2gene(args.tx2gene)
+    tx2gene = read_bed(args.bed)
     gene2pvals = read_qtltools_res(args.qtltools, tx2gene)
     combine_and_write(gene2pvals, args.method, args.output)
