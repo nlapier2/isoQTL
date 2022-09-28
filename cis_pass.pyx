@@ -60,6 +60,10 @@ cdef (double, double, double) precomp_wilks_bartlett(tx2expr, txlist, sample_siz
         intercept = np.mean(tx2expr[tx])
         resid = tx2expr[tx] - intercept
         resid_intercept.append(resid)
+    if np.linalg.cond(resid_intercept) >= 1 / sys.float_info.epsilon:  # if singular matrix
+        for ind in range(len(resid_intercept)):
+            noise = np.random.normal(0, 0.1, len(resid_intercept[ind]))
+            resid_intercept[ind] += noise
     resid_intercept = np.transpose(np.array(resid_intercept))
     cdef double det_resid_intercept = np.linalg.det(np.matmul(np.transpose(resid_intercept), resid_intercept) / sample_size)
     cdef double multiplier = -(sample_size - 2 - 0.5 * num_iso)
@@ -95,7 +99,13 @@ def precomp_xtx_inv(tx2expr, txlist):
     mat.append(np.ones(len(mat[0])))
     x = np.array(mat).T  # add intercept term
     # x = np.array([tx2expr[tx] for tx in txlist])
-    return x, np.linalg.inv(np.matmul(x.T, x))
+    xtx = np.matmul(x.T, x)
+    if np.linalg.cond(xtx) >= 1 / sys.float_info.epsilon:  # if singular matrix
+        for ind in range(len(xtx)):
+            noise = np.random.normal(0, 0.1, len(xtx[ind]))
+            xtx[ind] += noise
+    xtx_inv = np.linalg.inv(xtx)
+    return x, xtx_inv
 
 
 cdef (double, double) multi_regress_f_test_given_xtx(y, x, xtx_inv):
@@ -130,7 +140,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         perm_peak_pvals[m] = np.ones(len(permuted_tx2expr)) * 0.99999999
     if len(snp2geno) == 0:
         return peak_snps, peak_stats, peak_pvals, perm_peak_pvals
-    
+
     # initialize variables for computations
     cdef double pval = 0.0
     cdef double stat = 0.0
@@ -152,7 +162,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
     # go through each SNP to find strongest p-value for each method
     for snp in snp2geno:
         genos = np.array(snp2geno[snp]).astype(np.double)
-        
+
         # compute nominal pass
         if len(txlist) == 1:
             beta, inter, r, pval, stderr = linregress(tx2expr[txlist[0]], genos)
@@ -160,6 +170,8 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
         else:
             genos_var = np.var(genos)
             genos_mean = np.mean(genos)
+            if genos_var == 0.0:
+                continue
             betas, stderrs, all_pvals, residuals = stacked_regress(snp2geno[snp], tx2expr, txlist, genos_var, genos_mean, dof)
         for m in methods:
             if len(txlist) != 1:
@@ -179,7 +191,7 @@ def find_peak_snp(tx2expr, snp2geno, txlist, nominal_thresh, permuted_tx2expr, n
                 peak_pvals[m] = pval
                 peak_stats[m] = stat
                 peak_snps[m] = snp
-        
+
         # compute permutation pass
         if min([peak_pvals[key] for key in peak_pvals]) < nominal_thresh:
             for i in range(len(permuted_tx2expr)):
@@ -290,12 +302,12 @@ def nominal_pass(vcf, tx2info, tx2expr, gene_to_tx, meta_lines, window, bcftools
     for m in methods:
         gene_results[m] = {}
         perm_pvals[m] = {}
-    
+
     for gene in gene_to_tx:
         txlist = gene_to_tx[gene]
         # get window around gene and subset the vcf for that window using bcftools
         snp2geno = get_cis_snps(vcf, bcftools, txlist, tx2info, tx2expr, meta_lines, window)
-        
+
         # find and store the peak SNP for this gene and its association statistic and p-value
         if n_perms > 0:
             permuted_tx2expr = permute_transcripts(tx2expr, txlist, n_perms)
