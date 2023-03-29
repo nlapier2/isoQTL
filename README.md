@@ -1,6 +1,6 @@
 # IsoQTL
 
-This is the repository containing software implementation and information for replicating the results from the manuscript ``Accounting for Isoform Expression in eQTL Mapping Substantially Increases Power''. 
+This is the repository containing software implementation and information for replicating the results from the manuscript "Accounting for Isoform Expression in eQTL Mapping Substantially Increases Power". 
 
 For more information, or if you use the software, please cite our paper:
 
@@ -28,7 +28,7 @@ The results running p-value aggregation methods on QTLtools results were obtaine
 
 ### Replication folders
 
-The 'geuvadis' folder has scripts and basic instructions for replicating the simulation and GEUVADIS real data results. The 'gtex' foldeer has scripts and basic instructions for replicating the GTEx results. Please be aware that these require access to GEUVADIS and GTEx data, as explained in those respective directories.
+The 'geuvadis' folder has scripts and basic instructions for replicating the simulation and GEUVADIS real data results. The 'gtex' folder has scripts and basic instructions for replicating the GTEx results. Please be aware that these require access to GEUVADIS and GTEx data, as explained in those respective directories.
 
 The code used to plot the main text figures apart from Figure 1 is also provided in the 'geuvadis' and 'gtex' directories.
 
@@ -37,7 +37,7 @@ The code used to plot the main text figures apart from Figure 1 is also provided
 ### Example run
 
 ```
-python isoqtl.py --vcf dosages.vcf.gz --pheno iso_exp.bed.gz --output results_isoqtl.tsv
+python scripts/isoqtl.py --vcf dosages.vcf.gz --pheno iso_exp.bed.gz --output results_isoqtl.tsv
 ```
 
 If multiple genes are being tested for association, we highly recommend running an FDR control method on these results. We recommend the Q value, which is available in the R "qvalue" package. We have included a helper script to run this. For example:
@@ -58,7 +58,7 @@ For more details on the input file formats, output file formats, and arguments f
 
 IsoQTL takes as input a VCF file for the genotypes and a BED file for the phenotypes (isoform expression levels).
 
-The input VCF is expected to be in dosage ("DS") format. We are working on adding support for GT and GT:DS formats. If you have dosage format in addition to genotypes, you can use bcftools query to extract the dosage field. See: https://samtools.github.io/bcftools/bcftools-man.html#query
+The input VCF is expected to be in dosage ("DS") format. If you have dosage format in addition to genotypes, you can use bcftools query to extract the dosage field. See: https://samtools.github.io/bcftools/bcftools-man.html#query
 
 If you have genotypes but not dosage, you can convert to dosage format using the bcftools dosage plugin. This requires a little workaround to make a properly-formatted VCF file. For example:
 
@@ -128,5 +128,5 @@ ENSG00000732 rs598 49.0966 2.18176e-11 0.00990099 3.01129e-08 3.01129e-07
 ENSG00000188 rs745 -6.67684 2.37684e-09 0.00990099 5.81673e-06 4.23034909090909e-05
 ```
 
-Esentially, it is the same format, except without the header row, and with a new last column, which contains the Q value. All genes in this output are eGenes, as they have a Q value lower than the specified threshold. Again, for reporting p-values we recommend the Beta Permutation P-value, which is the second-to-last column here.
+Essentially, it is the same format, except without the header row, and with a new last column, which contains the Q value. All genes in this output are eGenes, as they have a Q value lower than the specified threshold. Again, for reporting p-values we recommend the Beta Permutation P-value, which is the second-to-last column here.
 
