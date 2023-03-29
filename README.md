@@ -1,6 +1,6 @@
 # IsoQTL
 
-IsoQTL is a method for isoform-aware eQTL mapping. Instead of summing together isoform expressions to create a gene-level expression, which loses power in cases such as splice QTLs where isoforms are regulated in opposite directions, we jointly test for association between each SNP in cis and all isoforms. An eGene is called if a SNP is associated with any isoform.
+This is the repository containing software implementation and information for replicating the results from the manuscript ``Accounting for Isoform Expression in eQTL Mapping Substantially Increases Power''. 
 
 For more information, or if you use the software, please cite our paper:
 
@@ -8,17 +8,30 @@ For more information, or if you use the software, please cite our paper:
 
 
 
-### Installation
+### Installation and Overview
 
-IsoQTL is based on python and cython. Compilation of the cython file is required but is not very complicated and should take less than a minute. Instructions:
+Most methods discussed in the paper (apart from QTLtools) are implemented in the 'isoqtl.py' and 'cis_pass.pyx' scripts in the 'scripts/' directory. Compilation of the cython file is required but is not very complicated and should take less than a minute. Instructions:
 
 ```
 git clone https://github.com/nlapier2/isoQTL.git
-cd isoQTL
+cd isoQTL/scripts/
 python setup.py build_ext --inplace
 ```
 
 We also require the following dependencies: bcftools, statsmodels python package
+
+The QTLtools results in the paper were obtained by running the QTLtools software package. See: https://qtltools.github.io/qtltools/
+
+The results running p-value aggregation methods on QTLtools results were obtained using combine_qtltools_iso_pvals.py.
+
+
+
+### Replication folders
+
+The 'geuvadis' folder has scripts and basic instructions for replicating the simulation and GEUVADIS real data results. The 'gtex' foldeer has scripts and basic instructions for replicating the GTEx results. Please be aware that these require access to GEUVADIS and GTEx data, as explained in those respective directories.
+
+The code used to plot the main text figures apart from Figure 1 is also provided in the 'geuvadis' and 'gtex' directories.
+
 
 
 ### Example run
@@ -30,12 +43,15 @@ python isoqtl.py --vcf dosages.vcf.gz --pheno iso_exp.bed.gz --output results_is
 If multiple genes are being tested for association, we highly recommend running an FDR control method on these results. We recommend the Q value, which is available in the R "qvalue" package. We have included a helper script to run this. For example:
 
 ```
-Rscript perform_qvalue_fdr.R results_isoqtl.tsv 0.1 fdr_results_isoqtl.tsv
+Rscript scripts/perform_qvalue_fdr.R results_isoqtl.tsv 0.1 IsoQTL fdr_results_isoqtl.tsv
 ```
 
-The arguments are the input file, the FDR control level, and the output file.
+The arguments are the input file, the FDR control level, the method that generated the results (use 'IsoQTL' if running isoqtl.py', and the output file.
+
+By default, the script will run all methods it is capable of running. The '--methods' flag can be used to run only a single method, e.g. for F-test only, append '--methods ftest'.
 
 For more details on the input file formats, output file formats, and arguments for these scripts, see below.
+
 
 
 ### Input file formats
@@ -65,8 +81,9 @@ The rest of the options are as follows (viewable in terminal by running "python 
 
 ```
 usage: isoqtl.py [-h] --vcf VCF --pheno PHENO [--bcftools BCFTOOLS]
-                 [--covariates COVARIATES] [--nominal NOMINAL]
-                 [--output OUTPUT] [--permute PERMUTE] [--steiger STEIGER]
+                 [--covariates COVARIATES]
+                 [--methods {wilks,fisher,min,cauchy,ftest} [{wilks,fisher,min,cauchy,ftest} ...]]
+                 [--nominal NOMINAL] [--output OUTPUT] [--permute PERMUTE]
                  [--window WINDOW]
 
 isoQTL main script.
@@ -79,16 +96,17 @@ optional arguments:
   --bcftools BCFTOOLS   Path to bcftools executable ("bcftools" by default).
   --covariates COVARIATES
                         tsv file listing covariates to adjust phenotypes for.
+  --methods {wilks,fisher,min,cauchy,ftest} [{wilks,fisher,min,cauchy,ftest} ...]
+                        Specify method to obtain gene-level p-value.
   --nominal NOMINAL     Print genes with a nominal assocation p-value below
                         this cutoff.
-  --output OUTPUT       Where to output results to.
+  --output OUTPUT       Base name for results.
   --permute PERMUTE     Number of permutations to do for a permutation pass.
                         Set to 0 to do nominal pass only.
-  --steiger STEIGER     P-value threshold for Steiger test for switching to
-                        simple linear regression.
   --window WINDOW       Size of window in bp around start position of
                         phenotypes.
 ```
+
 
 
 ### Output format
@@ -111,3 +129,4 @@ ENSG00000188 rs745 -6.67684 2.37684e-09 0.00990099 5.81673e-06 4.23034909090909e
 ```
 
 Esentially, it is the same format, except without the header row, and with a new last column, which contains the Q value. All genes in this output are eGenes, as they have a Q value lower than the specified threshold. Again, for reporting p-values we recommend the Beta Permutation P-value, which is the second-to-last column here.
+
