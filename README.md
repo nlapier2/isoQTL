@@ -4,7 +4,7 @@ IsoQTL is a method for isoform-aware eQTL mapping. Instead of summing together i
 
 For more information, or if you use the software, please cite our paper:
 
-{ COMING SOON }
+LaPierre N, Pimentel H. Accounting for Isoform Expression in eQTL Mapping Substantially Increases Power. bioRxiv. 2023:2023-06.
 
 
 
@@ -111,3 +111,4 @@ ENSG00000188 rs745 -6.67684 2.37684e-09 0.00990099 5.81673e-06 4.23034909090909e
 ```
 
 Esentially, it is the same format, except without the header row, and with a new last column, which contains the Q value. All genes in this output are eGenes, as they have a Q value lower than the specified threshold. Again, for reporting p-values we recommend the Beta Permutation P-value, which is the second-to-last column here.
+
